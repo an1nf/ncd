@@ -1,0 +1,18 @@
+/target
+/demo-out
+/results
+/dist
+__pycache__/
+*.pyc
+.direnv/
+result
+result-*
+
+# Never commit samples. Keep real malware outside the repository entirely.
+/data
+/corpus
+*.exe
+*.dll
+*.bin
+*.npy
+!docs/**
