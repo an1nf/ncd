@@ -2,6 +2,10 @@
 //! `NCD(x, y) = (C(xy) - min(C(x), C(y))) / max(C(x), C(y))`,
 //! a computable approximation of the normalized information distance.
 
+pub mod codec;
+
+pub use codec::Codec;
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("I/O error: {0}")]
