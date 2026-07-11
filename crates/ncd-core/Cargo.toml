@@ -11,6 +11,7 @@ rust-version.workspace = true
 [dependencies]
 bzip2 = "0.6.1"
 flate2 = "1.1.10"
+rayon = "1.12.0"
 thiserror = "2.0.21"
 xz2 = "0.1.7"
 zstd = "0.14.3"

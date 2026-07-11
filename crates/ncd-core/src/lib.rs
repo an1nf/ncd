@@ -3,8 +3,10 @@
 //! a computable approximation of the normalized information distance.
 
 pub mod codec;
+pub mod ncd;
 
 pub use codec::Codec;
+pub use ncd::{DistMatrix, Method};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
