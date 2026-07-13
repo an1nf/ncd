@@ -4,6 +4,7 @@
 
 pub mod codec;
 pub mod knn;
+pub mod metrics;
 pub mod ncd;
 
 pub use codec::Codec;
