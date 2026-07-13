@@ -6,6 +6,7 @@ pub mod codec;
 pub mod knn;
 pub mod metrics;
 pub mod ncd;
+pub mod npy;
 
 pub use codec::Codec;
 pub use ncd::{DistMatrix, Method};
