@@ -319,6 +319,24 @@ where
     }
 }
 
+/// Pairs with `a + b > window`. With `same`, counts unordered distinct pairs. O(n log n).
+pub fn window_overflows(window: usize, a: &[usize], b: &[usize], same: bool) -> u64 {
+    let mut sb = b.to_vec();
+    sb.sort_unstable();
+    let mut count: u64 = 0;
+    for &x in a {
+        let threshold = window.saturating_sub(x);
+        let idx = sb.partition_point(|&y| y <= threshold);
+        count += (sb.len() - idx) as u64;
+    }
+    if same {
+        let selfs = a.iter().filter(|&&x| x.saturating_mul(2) > window).count() as u64;
+        (count - selfs) / 2
+    } else {
+        count
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -411,5 +429,18 @@ mod tests {
     fn conditional_rejected_for_other_codecs() {
         let objs = [b"abc".to_vec()];
         assert!(pairwise(Codec::Xz { level: 6 }, &objs, Method::Conditional).is_err());
+    }
+
+    #[test]
+    fn overflow_counting() {
+        let a = [10, 20, 30, 40];
+        assert_eq!(window_overflows(50, &a, &a, true), 2);
+        assert_eq!(window_overflows(50, &a, &[25], false), 2);
+        let brute = a
+            .iter()
+            .enumerate()
+            .flat_map(|(i, &x)| a[i + 1..].iter().map(move |&y| (x + y > 45) as u64))
+            .sum::<u64>();
+        assert_eq!(window_overflows(45, &a, &a, true), brute);
     }
 }
