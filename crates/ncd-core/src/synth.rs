@@ -1,0 +1,191 @@
+//! Deterministic synthetic corpus. Families are mutated variants of a template
+//! drawn from a family-specific order-1 Markov source; each benign sample has
+//! its own source; all samples embed a common runtime blob.
+
+use crate::rng::SplitMix64;
+
+#[derive(Clone, Debug)]
+pub struct SynthConfig {
+    pub families: usize,
+    pub per_family: usize,
+    pub benign: usize,
+    pub template_len: usize,
+    /// Fraction of bytes mutated.
+    pub mutation_rate: f64,
+    pub seed: u64,
+}
+
+impl Default for SynthConfig {
+    fn default() -> Self {
+        Self {
+            families: 6,
+            per_family: 20,
+            benign: 30,
+            template_len: 16 << 10,
+            mutation_rate: 0.08,
+            seed: 2026,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Sample {
+    pub label: String,
+    pub id: String,
+    pub bytes: Vec<u8>,
+}
+
+struct Chain {
+    succ: Vec<[u8; 4]>,
+}
+
+impl Chain {
+    fn new(rng: &mut SplitMix64) -> Self {
+        // 64-symbol alphabet: code-like compressibility.
+        let alphabet: Vec<u8> = rng.bytes(64);
+        let succ = (0..256)
+            .map(|_| std::array::from_fn(|_| alphabet[rng.below(alphabet.len())]))
+            .collect();
+        Self { succ }
+    }
+
+    fn emit(&self, rng: &mut SplitMix64, len: usize) -> Vec<u8> {
+        let mut out = Vec::with_capacity(len);
+        let mut state = rng.byte();
+        for _ in 0..len {
+            let u = rng.unit();
+            state = if u < 0.02 {
+                rng.byte()
+            } else {
+                let pick = if u < 0.57 {
+                    0
+                } else if u < 0.82 {
+                    1
+                } else if u < 0.97 {
+                    2
+                } else {
+                    3
+                };
+                self.succ[state as usize][pick]
+            };
+            out.push(state);
+        }
+        out
+    }
+}
+
+fn mutate(rng: &mut SplitMix64, template: &[u8], rate: f64, chain: &Chain) -> Vec<u8> {
+    let mut v = template.to_vec();
+    for b in v.iter_mut() {
+        if rng.unit() < rate * 0.4 {
+            *b = rng.byte();
+        }
+    }
+    let ops = ((template.len() as f64 * rate) / 256.0).ceil() as usize;
+    for _ in 0..ops {
+        if v.len() < 1024 {
+            break;
+        }
+        match rng.below(4) {
+            0 => {
+                // dead code
+                let at = rng.below(v.len());
+                let n = rng.range(16, 256);
+                let junk = chain.emit(rng, n);
+                v.splice(at..at, junk);
+            }
+            1 => {
+                let len = rng.range(16, 256);
+                let at = rng.below(v.len() - len);
+                v.drain(at..at + len);
+            }
+            2 => {
+                let len = rng.range(32, 256);
+                let from = rng.below(v.len() - len);
+                let block = v[from..from + len].to_vec();
+                let at = rng.below(v.len());
+                v.splice(at..at, block);
+            }
+            _ => {
+                // function reordering
+                let len = rng.range(64, 512);
+                let a = rng.below(v.len() - 2 * len);
+                let b = rng.range(a + len, v.len() - len);
+                let (left, right) = v.split_at_mut(b);
+                left[a..a + len].swap_with_slice(&mut right[..len]);
+            }
+        }
+    }
+    v
+}
+
+fn assemble(rng: &mut SplitMix64, body: Vec<u8>, runtime: &[u8]) -> Vec<u8> {
+    let pre = rng.range(0, 1024);
+    let mut out = rng.bytes(pre); // packed-stub-like noise
+    let at = rng.below(body.len() + 1);
+    out.extend_from_slice(&body[..at]);
+    out.extend_from_slice(runtime);
+    out.extend_from_slice(&body[at..]);
+    let post = rng.range(0, 1024);
+    out.extend(rng.bytes(post));
+    out
+}
+
+/// Labels: `family_NN` and `benign`.
+pub fn generate(cfg: &SynthConfig) -> Vec<Sample> {
+    let mut rng = SplitMix64::new(cfg.seed);
+    let runtime = Chain::new(&mut rng).emit(&mut rng, 4096);
+    let mut out = Vec::new();
+    for f in 0..cfg.families {
+        let mut frng = rng.fork();
+        let chain = Chain::new(&mut frng);
+        let template = chain.emit(&mut frng, cfg.template_len);
+        for _ in 0..cfg.per_family {
+            let body = mutate(&mut frng, &template, cfg.mutation_rate, &chain);
+            let bytes = assemble(&mut frng, body, &runtime);
+            out.push(Sample {
+                label: format!("family_{f:02}"),
+                id: format!("{:016x}", frng.next_u64()),
+                bytes,
+            });
+        }
+    }
+    for _ in 0..cfg.benign {
+        let mut brng = rng.fork();
+        let chain = Chain::new(&mut brng);
+        let len = brng.range(cfg.template_len / 2, cfg.template_len * 3 / 2);
+        let body = chain.emit(&mut brng, len);
+        let bytes = assemble(&mut brng, body, &runtime);
+        out.push(Sample {
+            label: "benign".into(),
+            id: format!("{:016x}", brng.next_u64()),
+            bytes,
+        });
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deterministic_and_sized() {
+        let cfg = SynthConfig {
+            families: 2,
+            per_family: 3,
+            benign: 2,
+            template_len: 4096,
+            ..Default::default()
+        };
+        let a = generate(&cfg);
+        let b = generate(&cfg);
+        assert_eq!(a.len(), 8);
+        assert!(
+            a.iter()
+                .zip(&b)
+                .all(|(x, y)| x.bytes == y.bytes && x.id == y.id)
+        );
+        assert!(a.iter().all(|s| s.bytes.len() > 4096));
+    }
+}
