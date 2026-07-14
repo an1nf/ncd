@@ -221,8 +221,15 @@ fn compress_len(
             zstd_len(c, out, data)
         }
         Codec::Xz { level } => {
-            let stream = xz2::stream::Stream::new_easy_encoder(level, xz2::stream::Check::None)
-                .map_err(io::Error::other)?;
+            // Cap dict size to the input: same output, avoids 16-64 MiB allocs per call.
+            let mut opts = xz2::stream::LzmaOptions::new_preset(level).map_err(io::Error::other)?;
+            let need = data.len().max(4096).next_power_of_two().min(codec.window());
+            opts.dict_size(need as u32);
+            let mut filters = xz2::stream::Filters::new();
+            filters.lzma2(&opts);
+            let stream =
+                xz2::stream::Stream::new_stream_encoder(&filters, xz2::stream::Check::None)
+                    .map_err(io::Error::other)?;
             let mut enc = xz2::write::XzEncoder::new_stream(Counter::default(), stream);
             enc.write_all(data)?;
             Ok(enc.finish()?.0 as usize)
