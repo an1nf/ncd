@@ -5,7 +5,7 @@ use std::str::FromStr;
 
 use rayon::prelude::*;
 
-use crate::codec::{Codec, Worker};
+use crate::codec::{Codec, Worker, zstd_compressor, zstd_len};
 use crate::{Error, Result};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -15,6 +15,9 @@ pub enum Method {
     Concat,
     /// `(C(xy) + C(yx)) / 2`.
     ConcatSym,
+    /// zstd only. `C(y|x)` with the simpler object as a raw-content dictionary,
+    /// prepared once per row.
+    Conditional,
 }
 
 impl Method {
@@ -22,6 +25,7 @@ impl Method {
         match self {
             Method::Concat => "concat",
             Method::ConcatSym => "concat-sym",
+            Method::Conditional => "conditional",
         }
     }
 }
@@ -32,6 +36,7 @@ impl FromStr for Method {
         match s.trim().to_ascii_lowercase().as_str() {
             "concat" => Ok(Method::Concat),
             "concat-sym" | "sym" | "symmetric" => Ok(Method::ConcatSym),
+            "conditional" | "cond" | "dict" => Ok(Method::Conditional),
             _ => Err(Error::ParseMethod(s.to_string())),
         }
     }
@@ -127,42 +132,97 @@ pub fn compressed_lens<T: AsRef<[u8]> + Sync>(codec: Codec, objs: &[T]) -> Resul
         .collect()
 }
 
+fn check_method(codec: Codec, method: Method) -> Result<()> {
+    if method == Method::Conditional && !codec.supports_conditional() {
+        return Err(Error::Unsupported {
+            method: method.name().into(),
+            codec: codec.to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn zstd_level(codec: Codec) -> i32 {
+    match codec {
+        Codec::Zstd { level } => level,
+        _ => unreachable!("checked by check_method"),
+    }
+}
+
+/// `C(target | anchor)` for each target.
+fn conditional_row<'t>(
+    level: i32,
+    anchor: &[u8],
+    targets: impl Iterator<Item = (usize, &'t [u8])>,
+) -> io::Result<Vec<(usize, usize)>> {
+    let dict = zstd::dict::EncoderDictionary::copy(anchor, level);
+    let mut c = zstd_compressor(level, Some(&dict))?;
+    let mut out = Vec::new();
+    targets
+        .map(|(j, t)| Ok((j, zstd_len(&mut c, &mut out, t)?)))
+        .collect()
+}
+
+/// Order by (C(x), index); the smaller object is the dictionary.
+fn simpler(ca: usize, a: usize, cb: usize, b: usize) -> bool {
+    (ca, a) < (cb, b)
+}
+
 /// Symmetric `n×n` matrix, zero diagonal.
 pub fn pairwise<T: AsRef<[u8]> + Sync>(
     codec: Codec,
     objs: &[T],
     method: Method,
 ) -> Result<DistMatrix> {
+    check_method(codec, method)?;
     let n = objs.len();
     let lens = compressed_lens(codec, objs)?;
     let mut data = vec![0f32; n * n];
 
-    let rows: Vec<Vec<(usize, f32)>> = (0..n)
-        .into_par_iter()
-        .map_init(
-            || codec.worker(),
-            |w, i| -> Result<Vec<(usize, f32)>> {
-                let w: &mut Worker = w.as_mut().map_err(|e| clone_err(e))?;
-                let x = objs[i].as_ref();
-                ((i + 1)..n)
-                    .map(|j| {
-                        let y = objs[j].as_ref();
-                        let mut cxy = w.concat_len(x, y)? as f64;
-                        if method == Method::ConcatSym {
-                            cxy = (cxy + w.concat_len(y, x)? as f64) / 2.0;
-                        }
-                        let (lo, hi) = (lens[i].min(lens[j]), lens[i].max(lens[j]));
-                        let d = if hi == 0 {
-                            0.0
-                        } else {
-                            (cxy - lo as f64) / hi as f64
-                        };
-                        Ok((j, d as f32))
-                    })
-                    .collect()
-            },
-        )
-        .collect::<Result<_>>()?;
+    let rows: Vec<Vec<(usize, f32)>> = match method {
+        Method::Concat | Method::ConcatSym => (0..n)
+            .into_par_iter()
+            .map_init(
+                || codec.worker(),
+                |w, i| -> Result<Vec<(usize, f32)>> {
+                    let w: &mut Worker = w.as_mut().map_err(|e| clone_err(e))?;
+                    let x = objs[i].as_ref();
+                    ((i + 1)..n)
+                        .map(|j| {
+                            let y = objs[j].as_ref();
+                            let mut cxy = w.concat_len(x, y)? as f64;
+                            if method == Method::ConcatSym {
+                                cxy = (cxy + w.concat_len(y, x)? as f64) / 2.0;
+                            }
+                            let (lo, hi) = (lens[i].min(lens[j]), lens[i].max(lens[j]));
+                            let d = if hi == 0 {
+                                0.0
+                            } else {
+                                (cxy - lo as f64) / hi as f64
+                            };
+                            Ok((j, d as f32))
+                        })
+                        .collect()
+                },
+            )
+            .collect::<Result<_>>()?,
+        Method::Conditional => {
+            let level = zstd_level(codec);
+            (0..n)
+                .into_par_iter()
+                .map(|i| -> Result<Vec<(usize, f32)>> {
+                    let targets = (0..n)
+                        .filter(|&j| simpler(lens[i], i, lens[j], j))
+                        .map(|j| (j, objs[j].as_ref()));
+                    let row = conditional_row(level, objs[i].as_ref(), targets)?;
+                    Ok(row
+                        .into_iter()
+                        .map(|(j, c)| (j, ratio(c, lens[j])))
+                        .collect())
+                })
+                .collect::<Result<_>>()?
+        }
+    };
 
     for (i, row) in rows.into_iter().enumerate() {
         for (j, d) in row {
@@ -173,43 +233,90 @@ pub fn pairwise<T: AsRef<[u8]> + Sync>(
     DistMatrix::new(n, n, data)
 }
 
+fn ratio(num: usize, den: usize) -> f32 {
+    if den == 0 {
+        0.0
+    } else {
+        (num as f64 / den as f64) as f32
+    }
+}
+
 /// `m×n` matrix, queries × refs.
 pub fn cross<Q, R>(codec: Codec, queries: &[Q], refs: &[R], method: Method) -> Result<DistMatrix>
 where
     Q: AsRef<[u8]> + Sync,
     R: AsRef<[u8]> + Sync,
 {
+    check_method(codec, method)?;
     let (m, n) = (queries.len(), refs.len());
     let lq = compressed_lens(codec, queries)?;
     let lr = compressed_lens(codec, refs)?;
 
-    let rows: Vec<Vec<f32>> = (0..m)
-        .into_par_iter()
-        .map_init(
-            || codec.worker(),
-            |w, i| -> Result<Vec<f32>> {
-                let w: &mut Worker = w.as_mut().map_err(|e| clone_err(e))?;
-                let q = queries[i].as_ref();
-                (0..n)
-                    .map(|j| {
-                        let r = refs[j].as_ref();
-                        let mut cqr = w.concat_len(q, r)? as f64;
-                        if method == Method::ConcatSym {
-                            cqr = (cqr + w.concat_len(r, q)? as f64) / 2.0;
-                        }
-                        let (lo, hi) = (lq[i].min(lr[j]), lq[i].max(lr[j]));
-                        let d = if hi == 0 {
-                            0.0
-                        } else {
-                            (cqr - lo as f64) / hi as f64
-                        };
-                        Ok(d as f32)
-                    })
-                    .collect()
-            },
-        )
-        .collect::<Result<_>>()?;
-    DistMatrix::new(m, n, rows.concat())
+    match method {
+        Method::Concat | Method::ConcatSym => {
+            let rows: Vec<Vec<f32>> = (0..m)
+                .into_par_iter()
+                .map_init(
+                    || codec.worker(),
+                    |w, i| -> Result<Vec<f32>> {
+                        let w: &mut Worker = w.as_mut().map_err(|e| clone_err(e))?;
+                        let q = queries[i].as_ref();
+                        (0..n)
+                            .map(|j| {
+                                let r = refs[j].as_ref();
+                                let mut cqr = w.concat_len(q, r)? as f64;
+                                if method == Method::ConcatSym {
+                                    cqr = (cqr + w.concat_len(r, q)? as f64) / 2.0;
+                                }
+                                let (lo, hi) = (lq[i].min(lr[j]), lq[i].max(lr[j]));
+                                let d = if hi == 0 {
+                                    0.0
+                                } else {
+                                    (cqr - lo as f64) / hi as f64
+                                };
+                                Ok(d as f32)
+                            })
+                            .collect()
+                    },
+                )
+                .collect::<Result<_>>()?;
+            DistMatrix::new(m, n, rows.concat())
+        }
+        Method::Conditional => {
+            let level = zstd_level(codec);
+            let mut data = vec![0f32; m * n];
+            // Each pair is computed once, from the side with smaller C(x); ties go to queries.
+            let by_query: Vec<Vec<(usize, usize)>> = (0..m)
+                .into_par_iter()
+                .map(|i| {
+                    let targets = (0..n)
+                        .filter(|&j| lq[i] <= lr[j])
+                        .map(|j| (j, refs[j].as_ref()));
+                    conditional_row(level, queries[i].as_ref(), targets)
+                })
+                .collect::<io::Result<_>>()?;
+            for (i, row) in by_query.into_iter().enumerate() {
+                for (j, c) in row {
+                    data[i * n + j] = ratio(c, lr[j]);
+                }
+            }
+            let by_ref: Vec<Vec<(usize, usize)>> = (0..n)
+                .into_par_iter()
+                .map(|j| {
+                    let targets = (0..m)
+                        .filter(|&i| lq[i] > lr[j])
+                        .map(|i| (i, queries[i].as_ref()));
+                    conditional_row(level, refs[j].as_ref(), targets)
+                })
+                .collect::<io::Result<_>>()?;
+            for (j, col) in by_ref.into_iter().enumerate() {
+                for (i, c) in col {
+                    data[i * n + j] = ratio(c, lq[i]);
+                }
+            }
+            DistMatrix::new(m, n, data)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -274,5 +381,35 @@ mod tests {
                 assert_eq!(m.get(i, j), m.get(j, i));
             }
         }
+    }
+
+    #[test]
+    fn conditional_cross_matches_pairwise() {
+        let base = noise(42, 8000);
+        let objs: Vec<Vec<u8>> = (0..5)
+            .map(|i| {
+                let mut v = base.clone();
+                v.extend(noise(100 + i, 1000 * (i as usize + 1)));
+                v
+            })
+            .collect();
+        let codec = Codec::Zstd { level: 19 };
+        let p = pairwise(codec, &objs, Method::Conditional).unwrap();
+        let c = cross(codec, &objs, &objs, Method::Conditional).unwrap();
+        for i in 0..5 {
+            for j in 0..5 {
+                if i != j {
+                    assert!((p.get(i, j) - c.get(i, j)).abs() < 1e-6, "({i},{j})");
+                }
+            }
+        }
+        assert!(p.get(0, 1) < 0.6, "{}", p.get(0, 1));
+        assert!(c.get(2, 2) < 0.05, "{}", c.get(2, 2));
+    }
+
+    #[test]
+    fn conditional_rejected_for_other_codecs() {
+        let objs = [b"abc".to_vec()];
+        assert!(pairwise(Codec::Xz { level: 6 }, &objs, Method::Conditional).is_err());
     }
 }

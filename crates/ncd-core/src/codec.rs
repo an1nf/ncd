@@ -65,6 +65,10 @@ impl Codec {
         }
     }
 
+    pub fn supports_conditional(&self) -> bool {
+        matches!(self, Codec::Zstd { .. })
+    }
+
     pub fn worker(&self) -> io::Result<Worker> {
         Worker::new(*self)
     }

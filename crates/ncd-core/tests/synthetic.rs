@@ -30,6 +30,7 @@ fn loo_knn_classifies_families() {
     let (objs, labels, names) = corpus();
     for (codec, method) in [
         (Codec::Zstd { level: 19 }, Method::Concat),
+        (Codec::Zstd { level: 19 }, Method::Conditional),
         (Codec::Xz { level: 6 }, Method::Concat),
     ] {
         let m = ncd::pairwise(codec, &objs, method).unwrap();
