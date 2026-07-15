@@ -3,6 +3,7 @@
 //! a computable approximation of the normalized information distance.
 
 pub mod codec;
+pub mod extract;
 pub mod knn;
 pub mod metrics;
 pub mod ncd;
@@ -11,6 +12,7 @@ mod rng;
 pub mod synth;
 
 pub use codec::Codec;
+pub use extract::View;
 pub use ncd::{DistMatrix, Method};
 
 #[derive(Debug, thiserror::Error)]
