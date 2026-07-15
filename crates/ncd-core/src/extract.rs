@@ -250,4 +250,39 @@ mod tests {
         assert_eq!(ex.format, Format::Unknown);
         assert_eq!(ex.bytes, data);
     }
+
+    #[test]
+    fn hostile_offsets_are_clamped() {
+        let mut pe = tiny_pe();
+        // .text raw pointer far past EOF, .data raw size huge
+        let sec = 0x80 + 4 + 20 + 0xe0;
+        pe[sec + 20..sec + 24].copy_from_slice(&0xFFFF_FF00u32.to_le_bytes());
+        pe[sec + 40 + 16..sec + 40 + 20].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+        for v in [View::Code, View::NoOverlay, View::Whole] {
+            let _ = extract(&pe, v); // must not panic
+        }
+    }
+
+    #[test]
+    fn truncated_and_random_inputs_never_panic() {
+        let pe = tiny_pe();
+        for cut in (0..pe.len()).step_by(7) {
+            for v in [View::Code, View::NoOverlay] {
+                let ex = extract(&pe[..cut], v);
+                assert!(ex.bytes.len() <= cut);
+            }
+        }
+        let mut s: u64 = 0x9e3779b97f4a7c15;
+        for _ in 0..300 {
+            let mut buf = pe.clone();
+            for _ in 0..16 {
+                s ^= s << 13;
+                s ^= s >> 7;
+                s ^= s << 17;
+                let i = (s as usize) % buf.len();
+                buf[i] = (s >> 32) as u8;
+            }
+            let _ = extract(&buf, View::Code);
+        }
+    }
 }
