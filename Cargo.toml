@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
-members = ["crates/ncd-core"]
-default-members = ["crates/ncd-core"]
+members = ["crates/ncd-core", "crates/ncd-cli"]
+default-members = ["crates/ncd-core", "crates/ncd-cli"]
 
 [workspace.package]
 version = "0.1.0"
