@@ -11,7 +11,7 @@ use clap::{Args, Parser, Subcommand};
 use ncd_core::extract::{self, Format};
 use ncd_core::metrics::{self, Report};
 use ncd_core::synth::{self, SynthConfig};
-use ncd_core::{Codec, Method, View, knn, ncd, npy};
+use ncd_core::{Codec, DistMatrix, Method, View, knn, ncd, npy};
 use rayon::prelude::*;
 use serde_json::json;
 
@@ -96,6 +96,22 @@ enum Cmd {
         out: PathBuf,
         #[command(flatten)]
         opts: Opts,
+    },
+    /// Compare codecs: throughput, NCD(x,x), window overflows, 1-NN accuracy
+    Bench {
+        dir: PathBuf,
+        #[arg(
+            long,
+            value_delimiter = ',',
+            default_value = "zstd:3,zstd:19,xz:9,bzip2:9,deflate:9"
+        )]
+        codecs: Vec<Codec>,
+        #[arg(long, short, default_value = "concat")]
+        method: Method,
+        #[arg(long, short, default_value = "code")]
+        view: View,
+        #[arg(long)]
+        max_bytes: Option<usize>,
     },
     /// Write the synthetic corpus
     Synth {
@@ -431,6 +447,70 @@ fn main() -> Result<()> {
                 ),
             }
             eprintln!("wrote {}", out.display());
+        }
+
+        Cmd::Bench {
+            dir,
+            codecs,
+            method,
+            view,
+            max_bytes,
+        } => {
+            let opts = Opts {
+                codec: Codec::default(),
+                method,
+                view,
+                max_bytes,
+            };
+            let c = Corpus::load(&dir, &opts)?;
+            let sizes = c.sizes();
+            let total: usize = sizes.iter().sum();
+            let n = c.objs.len();
+            let labelled = c.names.len() > 1;
+            println!(
+                "| codec | C(x) MiB/s | mean C(x)/|x| | mean NCD(x,x) | pairs over window | matrix time | 1-NN LOO acc | macro-F1 |"
+            );
+            println!("|---|---:|---:|---:|---:|---:|---:|---:|");
+            for codec in codecs {
+                if method == Method::Conditional && !codec.supports_conditional() {
+                    println!(
+                        "| {codec} | - | - | - | - | n/a ({}) | - | - |",
+                        method.name()
+                    );
+                    continue;
+                }
+                let t = Instant::now();
+                let lens = ncd::compressed_lens(codec, &c.objs)?;
+                let secs = t.elapsed().as_secs_f64();
+                let ratio = lens
+                    .iter()
+                    .zip(&sizes)
+                    .map(|(&l, &s)| l as f64 / s.max(1) as f64)
+                    .sum::<f64>()
+                    / n as f64;
+                let self_d: Vec<f64> = c
+                    .objs
+                    .par_iter()
+                    .map(|x| ncd::ncd_with(codec, method, x, x).unwrap_or(f64::NAN))
+                    .collect();
+                let self_mean = self_d.iter().sum::<f64>() / n as f64;
+                let over = ncd::window_overflows(codec.window(), &sizes, &sizes, true);
+                let t = Instant::now();
+                let m: DistMatrix = ncd::pairwise(codec, &c.objs, method)?;
+                let mt = t.elapsed();
+                let (acc, f1) = if labelled {
+                    let r =
+                        metrics::report(&c.labels, &knn::loo_predict(&m, &c.labels, 1), &c.names);
+                    (format!("{:.4}", r.accuracy), format!("{:.4}", r.macro_f1))
+                } else {
+                    ("-".into(), "-".into())
+                };
+                println!(
+                    "| {codec} | {:.1} | {ratio:.3} | {self_mean:.4} | {over} / {} | {mt:.2?} | {acc} | {f1} |",
+                    total as f64 / (1 << 20) as f64 / secs,
+                    n * (n - 1) / 2
+                );
+            }
         }
 
         Cmd::Synth {
