@@ -79,6 +79,24 @@ enum Cmd {
         #[command(flatten)]
         opts: Opts,
     },
+    /// Mean NCD to the k nearest references
+    Score {
+        /// Reference corpus, e.g. benign only
+        #[arg(long)]
+        refs: PathBuf,
+        /// Query corpus; labels other than --normal-label are positives for ROC AUC
+        #[arg(long)]
+        queries: PathBuf,
+        #[arg(long, short, default_value_t = 5)]
+        k: usize,
+        #[arg(long, default_value = "benign")]
+        normal_label: String,
+        /// Output CSV: id,label,score
+        #[arg(long, short)]
+        out: PathBuf,
+        #[command(flatten)]
+        opts: Opts,
+    },
     /// Write the synthetic corpus
     Synth {
         out: PathBuf,
@@ -373,6 +391,46 @@ fn main() -> Result<()> {
                 w.flush()?;
                 eprintln!("wrote {}", path.display());
             }
+        }
+
+        Cmd::Score {
+            refs,
+            queries,
+            k,
+            normal_label,
+            out,
+            opts,
+        } => {
+            let r = Corpus::load(&refs, &opts)?;
+            let q = Corpus::load(&queries, &opts)?;
+            warn_window(opts.codec, &q.sizes(), &r.sizes(), false);
+            let t = Instant::now();
+            let cross = ncd::cross(opts.codec, &q.objs, &r.objs, opts.method)?;
+            let scores = knn::anomaly_scores(&cross, k);
+            eprintln!(
+                "{}×{} cross matrix in {:.2?}",
+                cross.rows(),
+                cross.cols(),
+                t.elapsed()
+            );
+            let mut w = BufWriter::new(fs::File::create(&out)?);
+            writeln!(w, "id,label,score")?;
+            for ((id, &l), s) in q.ids.iter().zip(&q.labels).zip(&scores) {
+                writeln!(w, "{id},{},{s}", q.names[l as usize])?;
+            }
+            w.flush()?;
+            let positive: Vec<bool> = q
+                .labels
+                .iter()
+                .map(|&l| q.names[l as usize] != normal_label)
+                .collect();
+            match metrics::roc_auc(&scores, &positive) {
+                Some(auc) => println!("ROC AUC (positive = not `{normal_label}`): {auc:.4}"),
+                None => println!(
+                    "ROC AUC unavailable (queries need both `{normal_label}` and other labels)"
+                ),
+            }
+            eprintln!("wrote {}", out.display());
         }
 
         Cmd::Synth {
