@@ -1,6 +1,6 @@
 //! Deterministic synthetic corpus. Families are mutated variants of a template
-//! drawn from a family-specific order-1 Markov source; each benign sample has
-//! its own source; all samples embed a common runtime blob.
+//! drawn from a family-specific order-1 Markov source; benign samples share
+//! modules per vendor; all samples embed a common runtime blob.
 
 use crate::rng::SplitMix64;
 
@@ -9,6 +9,7 @@ pub struct SynthConfig {
     pub families: usize,
     pub per_family: usize,
     pub benign: usize,
+    pub benign_vendors: usize,
     pub template_len: usize,
     /// Fraction of bytes mutated.
     pub mutation_rate: f64,
@@ -21,6 +22,7 @@ impl Default for SynthConfig {
             families: 6,
             per_family: 20,
             benign: 30,
+            benign_vendors: 4,
             template_len: 16 << 10,
             mutation_rate: 0.08,
             seed: 2026,
@@ -150,11 +152,30 @@ pub fn generate(cfg: &SynthConfig) -> Vec<Sample> {
             });
         }
     }
-    for _ in 0..cfg.benign {
+    let vendors: Vec<(Chain, Vec<Vec<u8>>, SplitMix64)> = (0..cfg.benign_vendors.max(1))
+        .map(|_| {
+            let mut vrng = rng.fork();
+            let chain = Chain::new(&mut vrng);
+            let modules = (0..8)
+                .map(|_| chain.emit(&mut vrng, cfg.template_len / 6))
+                .collect();
+            (chain, modules, vrng)
+        })
+        .collect();
+    for b in 0..cfg.benign {
+        let (chain, modules, _) = &vendors[b % vendors.len()];
         let mut brng = rng.fork();
-        let chain = Chain::new(&mut brng);
-        let len = brng.range(cfg.template_len / 2, cfg.template_len * 3 / 2);
-        let body = chain.emit(&mut brng, len);
+        let mut picked: Vec<usize> = (0..modules.len()).collect();
+        for i in (1..picked.len()).rev() {
+            picked.swap(i, brng.below(i + 1));
+        }
+        let take = brng.range(3, 5);
+        let mut body = Vec::new();
+        for &m in &picked[..take] {
+            body.extend_from_slice(&modules[m]);
+            let own = brng.range(cfg.template_len / 16, cfg.template_len / 4);
+            body.extend(chain.emit(&mut brng, own));
+        }
         let bytes = assemble(&mut brng, body, &runtime);
         out.push(Sample {
             label: "benign".into(),

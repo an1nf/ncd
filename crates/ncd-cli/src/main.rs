@@ -529,6 +529,7 @@ fn main() -> Result<()> {
                 template_len,
                 mutation_rate,
                 seed,
+                ..Default::default()
             };
             let samples = synth::generate(&cfg);
             for s in &samples {
