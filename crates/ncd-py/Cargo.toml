@@ -1,0 +1,19 @@
+[package]
+name = "ncd-py"
+description = "Python bindings (ncdthreat) for ncd-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "ncdthreat"
+crate-type = ["cdylib"]
+
+[dependencies]
+ncd-core = { path = "../ncd-core" }
+numpy = "0.30.0"
+# abi3: one wheel works on every CPython >= 3.9
+pyo3 = { version = "0.30.1", features = ["extension-module", "abi3-py39"] }
