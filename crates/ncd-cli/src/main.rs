@@ -71,6 +71,9 @@ enum Cmd {
         /// Stratified hold-out fraction; 0 = leave-one-out
         #[arg(long, default_value_t = 0.0)]
         test_frac: f64,
+        /// CSV with id,split (train/test); overrides --test-frac
+        #[arg(long)]
+        split_file: Option<PathBuf>,
         #[arg(long, default_value_t = 2026)]
         seed: u64,
         /// Metrics and predictions as JSON
@@ -150,7 +153,8 @@ impl Corpus {
             .sort_by_file_name()
         {
             let e = e?;
-            if !e.file_type().is_file() || e.file_name().to_string_lossy().starts_with('.') {
+            // follows symlinks
+            if !e.path().is_file() || e.file_name().to_string_lossy().starts_with('.') {
                 continue;
             }
             let label = if e.depth() == 2 {
@@ -268,6 +272,43 @@ fn report_json(r: &Report) -> serde_json::Value {
     })
 }
 
+/// Columns `id` (or `sha256`) and `split`; others ignored.
+fn read_split_file(path: &Path) -> Result<HashMap<String, bool>> {
+    let text = fs::read_to_string(path).with_context(|| path.display().to_string())?;
+    let mut lines = text.lines();
+    let header: Vec<String> = lines
+        .next()
+        .unwrap_or_default()
+        .split(',')
+        .map(|s| s.trim().to_lowercase())
+        .collect();
+    let col = |names: &[&str]| header.iter().position(|h| names.contains(&h.as_str()));
+    let (Some(id_col), Some(split_col)) = (col(&["id", "sha256"]), col(&["split"])) else {
+        bail!(
+            "{}: header must contain `id` (or `sha256`) and `split`",
+            path.display()
+        );
+    };
+    let mut out = HashMap::new();
+    for (n, line) in lines.enumerate().filter(|(_, l)| !l.trim().is_empty()) {
+        let f: Vec<&str> = line.split(',').map(str::trim).collect();
+        let (Some(id), Some(split)) = (f.get(id_col), f.get(split_col)) else {
+            bail!("{}:{}: missing column", path.display(), n + 2);
+        };
+        let is_test = match split.to_lowercase().as_str() {
+            "test" => true,
+            "train" => false,
+            other => bail!(
+                "{}:{}: split must be train/test, got `{other}`",
+                path.display(),
+                n + 2
+            ),
+        };
+        out.insert(id.to_string(), is_test);
+    }
+    Ok(out)
+}
+
 /// Seeded Fisher-Yates per class.
 fn stratified_split(labels: &[u32], test_frac: f64, seed: u64) -> (Vec<usize>, Vec<usize>) {
     let mut by_class: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
@@ -342,15 +383,36 @@ fn main() -> Result<()> {
             dir,
             k,
             test_frac,
+            split_file,
             seed,
             json,
             opts,
         } => {
             let c = Corpus::load(&dir, &opts)?;
             let t = Instant::now();
-            let holdout = test_frac > 0.0;
+            let holdout = split_file.is_some() || test_frac > 0.0;
             let (eval_idx, y_pred, protocol) = if holdout {
-                let (train, test) = stratified_split(&c.labels, test_frac, seed);
+                let (train, test) = match &split_file {
+                    Some(p) => {
+                        let split = read_split_file(p)?;
+                        let (mut tr, mut te) = (Vec::new(), Vec::new());
+                        for (i, id) in c.ids.iter().enumerate() {
+                            match split.get(id) {
+                                Some(true) => te.push(i),
+                                Some(false) => tr.push(i),
+                                None => {}
+                            }
+                        }
+                        eprintln!(
+                            "split file: {} train / {} test ({} samples not listed)",
+                            tr.len(),
+                            te.len(),
+                            c.ids.len() - tr.len() - te.len()
+                        );
+                        (tr, te)
+                    }
+                    None => stratified_split(&c.labels, test_frac, seed),
+                };
                 if train.is_empty() || test.is_empty() {
                     bail!("empty train or test set");
                 }
