@@ -272,6 +272,15 @@ fn report_json(r: &Report) -> serde_json::Value {
     })
 }
 
+fn create(path: &Path) -> Result<BufWriter<fs::File>> {
+    if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+        fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    }
+    Ok(BufWriter::new(
+        fs::File::create(path).with_context(|| format!("creating {}", path.display()))?,
+    ))
+}
+
 /// Columns `id` (or `sha256`) and `split`; others ignored.
 fn read_split_file(path: &Path) -> Result<HashMap<String, bool>> {
     let text = fs::read_to_string(path).with_context(|| path.display().to_string())?;
@@ -363,14 +372,9 @@ fn main() -> Result<()> {
             let t = Instant::now();
             let m = ncd::pairwise(opts.codec, &c.objs, opts.method)?;
             eprintln!("{}×{} matrix in {:.2?}", m.rows(), m.cols(), t.elapsed());
-            npy::write_f32(
-                BufWriter::new(fs::File::create(&out)?),
-                m.rows(),
-                m.cols(),
-                m.as_slice(),
-            )?;
+            npy::write_f32(create(&out)?, m.rows(), m.cols(), m.as_slice())?;
             let index = out.with_extension("index.csv");
-            let mut w = BufWriter::new(fs::File::create(&index)?);
+            let mut w = create(&index)?;
             writeln!(w, "id,label")?;
             for (id, &l) in c.ids.iter().zip(&c.labels) {
                 writeln!(w, "{id},{}", c.names[l as usize])?;
@@ -464,7 +468,7 @@ fn main() -> Result<()> {
                     "k": k, "protocol": protocol, "labels": c.names,
                     "metrics": report_json(&r), "predictions": preds,
                 });
-                let mut w = BufWriter::new(fs::File::create(&path)?);
+                let mut w = create(&path)?;
                 serde_json::to_writer_pretty(&mut w, &doc)?;
                 w.flush()?;
                 eprintln!("wrote {}", path.display());
@@ -491,7 +495,7 @@ fn main() -> Result<()> {
                 cross.cols(),
                 t.elapsed()
             );
-            let mut w = BufWriter::new(fs::File::create(&out)?);
+            let mut w = create(&out)?;
             writeln!(w, "id,label,score")?;
             for ((id, &l), s) in q.ids.iter().zip(&q.labels).zip(&scores) {
                 writeln!(w, "{id},{},{s}", q.names[l as usize])?;
