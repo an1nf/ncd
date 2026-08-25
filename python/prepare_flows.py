@@ -43,7 +43,8 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("csv", type=Path, nargs="+")
     ap.add_argument("--out", type=Path, required=True)
-    ap.add_argument("--window", type=int, default=32, help="flows per window")
+    ap.add_argument("--window", type=int, default=64,
+                    help="flows per window; below ~64 objects get too small for NCD (see README)")
     ap.add_argument("--bins", type=int, default=16, help="quantile bins per feature (≤255)")
     ap.add_argument("--min-attack-frac", type=float, default=0.5)
     ap.add_argument("--split", choices=["random", "temporal"], default="random")
