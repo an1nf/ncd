@@ -313,7 +313,7 @@ fn read_split_file(path: &Path) -> Result<HashMap<String, bool>> {
                 n + 2
             ),
         };
-        out.insert(id.to_string(), is_test);
+        out.insert(id.to_lowercase(), is_test);
     }
     Ok(out)
 }
@@ -401,7 +401,7 @@ fn main() -> Result<()> {
                         let split = read_split_file(p)?;
                         let (mut tr, mut te) = (Vec::new(), Vec::new());
                         for (i, id) in c.ids.iter().enumerate() {
-                            match split.get(id) {
+                            match split.get(&id.to_lowercase()) {
                                 Some(true) => te.push(i),
                                 Some(false) => tr.push(i),
                                 None => {}
@@ -611,4 +611,44 @@ fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stratified_split_keeps_every_class_on_both_sides() {
+        let labels: Vec<u32> = (0..3)
+            .flat_map(|c| std::iter::repeat_n(c, 10))
+            .chain([3])
+            .collect();
+        let (train, test) = stratified_split(&labels, 0.3, 7);
+        assert_eq!(train.len() + test.len(), labels.len());
+        for c in 0..3 {
+            assert_eq!(test.iter().filter(|&&i| labels[i] == c).count(), 3);
+        }
+        assert!(train.contains(&30) && !test.contains(&30));
+        assert_eq!(
+            stratified_split(&labels, 0.3, 7),
+            (train, test),
+            "seeded ⇒ deterministic"
+        );
+    }
+
+    #[test]
+    fn split_file_parsing() {
+        let dir = std::env::temp_dir().join(format!("ncd-split-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("s.csv");
+        fs::write(&p, "label,sha256,split\nfam,AB12,train\nfam,cd34,TEST\n\n").unwrap();
+        let m = read_split_file(&p).unwrap();
+        assert_eq!(m.get("ab12"), Some(&false));
+        assert_eq!(m.get("cd34"), Some(&true));
+        fs::write(&p, "id,split\nx,validation\n").unwrap();
+        assert!(read_split_file(&p).is_err());
+        fs::write(&p, "id,label\nx,y\n").unwrap();
+        assert!(read_split_file(&p).is_err());
+        fs::remove_dir_all(&dir).ok();
+    }
 }
