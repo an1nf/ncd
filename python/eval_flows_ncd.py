@@ -34,15 +34,18 @@ def main() -> None:
     tag = f"ncd-{args.codec.replace(':', '')}-{args.method}"
     print(f"{len(tr)} train / {len(te)} test windows; codec {args.codec}, method {args.method}")
 
-    t = time.perf_counter()
-    D = nt.cross([objs[i] for i in te], [objs[i] for i in tr], codec=args.codec, method=args.method)
-    pred = knn_predict(D, labels[tr], args.k)
-    secs = time.perf_counter() - t
-    metrics = report_dict(labels[te], pred, sorted(set(labels)))
-    print_summary(f"{tag} {args.k}-NN", metrics)
-    save_result(args.out_dir / f"flows_{tag}-knn{args.k}.json", model=f"{tag}-knn{args.k}",
-                task="flow-classification", metrics=metrics, seconds=secs,
-                predictions=[{"id": meta["id"][i], "true": labels[i], "pred": p} for i, p in zip(te, pred)])
+    if len(set(labels[tr])) < 2:
+        print("training windows have a single label: skipping k-NN classification")
+    else:
+        t = time.perf_counter()
+        D = nt.cross([objs[i] for i in te], [objs[i] for i in tr], codec=args.codec, method=args.method)
+        pred = knn_predict(D, labels[tr], args.k)
+        secs = time.perf_counter() - t
+        metrics = report_dict(labels[te], pred, sorted(set(labels)))
+        print_summary(f"{tag} {args.k}-NN", metrics)
+        save_result(args.out_dir / f"flows_{tag}-knn{args.k}.json", model=f"{tag}-knn{args.k}",
+                    task="flow-classification", metrics=metrics, seconds=secs,
+                    predictions=[{"id": meta["id"][i], "true": labels[i], "pred": p} for i, p in zip(te, pred)])
 
     refs = tr[labels[tr] == BENIGN]
     if args.max_refs and len(refs) > args.max_refs:

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """CICFlowMeter CSVs to byte windows for NCD and aggregate features for baselines.
 One byte per feature (quantile bin fitted on train flows), 0xFF between flows,
---window consecutive flows per source host.
+--window consecutive flows per source host and file.
+CIC-IDS2017: use the TrafficLabelling CSVs (they keep Source IP and Timestamp).
 """
 
 from __future__ import annotations
@@ -14,7 +15,10 @@ import pandas as pd
 
 from common import BENIGN, sanitize_label
 
-ID_COLS = {"flow id", "source ip", "src ip", "source port", "src port", "destination ip", "dst ip", "timestamp", "label"}
+SRC_COLS = ("source ip", "src ip", "src_ip", "source_ip", "src_addr", "ip_src")
+TS_COLS = ("timestamp", "flow start", "start time")
+ID_COLS = {"flow id", "flow_id", "source port", "src port", "src_port", "destination ip", "dst ip", "dst_ip",
+           "dst_addr", "ip_dst", "label", *SRC_COLS, *TS_COLS}
 
 
 def read_csvs(paths: list[Path]) -> pd.DataFrame:
@@ -24,7 +28,7 @@ def read_csvs(paths: list[Path]) -> pd.DataFrame:
             df = pd.read_csv(p, low_memory=False)
         except UnicodeDecodeError:
             df = pd.read_csv(p, low_memory=False, encoding="latin-1")
-        df.columns = [c.strip() for c in df.columns]
+        df.columns = [str(c).strip() for c in df.columns]
         df["__file"] = p.name
         df["__row"] = np.arange(len(df))
         frames.append(df)
@@ -47,7 +51,11 @@ def main() -> None:
                     help="flows per window; below ~64 objects get too small for NCD (see README)")
     ap.add_argument("--bins", type=int, default=16, help="quantile bins per feature (≤255)")
     ap.add_argument("--min-attack-frac", type=float, default=0.5)
-    ap.add_argument("--split", choices=["random", "temporal"], default="random")
+    ap.add_argument("--split", choices=["random", "temporal", "file"], default="random")
+    ap.add_argument("--train-files", nargs="+", default=None,
+                    help="with --split file: substrings of training file names, e.g. Monday")
+    ap.add_argument("--order", choices=["time", "rows"], default="time",
+                    help="flow order within a source: timestamp or CSV row order")
     ap.add_argument("--test-frac", type=float, default=0.3)
     ap.add_argument("--max-per-label", type=int, default=None, help="subsample windows per label")
     ap.add_argument("--drop-port", action="store_true", help="exclude Destination Port (a known shortcut feature)")
@@ -61,14 +69,25 @@ def main() -> None:
     label_col = find_col(df, "label")
     if label_col is None:
         raise SystemExit("no Label column")
-    src_col = find_col(df, "source ip", "src ip")
-    ts_col = find_col(df, "timestamp")
+    src_col = find_col(df, *SRC_COLS)
+    ts_col = find_col(df, *TS_COLS) if args.order == "time" else None
+    # empty trailing rows and repeated header rows
+    bad = df[label_col].isna() | (df[label_col].astype(str).str.strip().str.lower() == "label")
+    if bad.any():
+        print(f"dropping {int(bad.sum()):,} rows without a label")
+        df = df.loc[~bad].reset_index(drop=True)
     df["__label"] = df[label_col].map(sanitize_label)
     print(f"{len(df):,} flows from {len(args.csv)} file(s); labels: {df['__label'].value_counts().to_dict()}")
+    print(f"source column: {src_col}; order: {'timestamp ' + ts_col if ts_col else 'file rows'}")
 
-    feat_cols = [c for c in df.columns
-                 if c.lower() not in ID_COLS and not c.startswith("__")
-                 and pd.api.types.is_numeric_dtype(df[c])]
+    feat_cols = []
+    for c in df.columns:
+        if c.lower() in ID_COLS or c.startswith("__"):
+            continue
+        if not pd.api.types.is_numeric_dtype(df[c]):
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+        if df[c].notna().mean() > 0.99:
+            feat_cols.append(c)
     if args.drop_port:
         feat_cols = [c for c in feat_cols if c.lower() not in {"destination port", "dst port"}]
     feats = df[feat_cols].to_numpy(dtype=np.float64)
@@ -78,7 +97,7 @@ def main() -> None:
     df["__src"] = df[src_col].astype(str) if src_col else "all"
     if ts_col:
         df["__t"] = pd.to_datetime(df[ts_col], errors="coerce", dayfirst=True)
-        order = df.sort_values(["__src", "__t", "__file", "__row"]).index.to_numpy()
+        order = df.sort_values(["__file", "__src", "__t", "__row"]).index.to_numpy()
     else:
         order = df.sort_values(["__file", "__src", "__row"]).index.to_numpy()
     srcs = df["__src"].to_numpy()[order]
@@ -91,9 +110,8 @@ def main() -> None:
     start = 0
     n = len(order)
     while start < n:
-        # run of one source (and one file without timestamps)
         end = start
-        while end < n and srcs[end] == srcs[start] and (ts_col or files[end] == files[start]):
+        while end < n and srcs[end] == srcs[start] and files[end] == files[start]:
             end += 1
         for w0 in range(start, end, args.window):
             w1 = min(w0 + args.window, end)
@@ -112,7 +130,7 @@ def main() -> None:
                 continue
             windows.append(order[w0:w1])
             first_t = df["__t"].iloc[order[w0]] if ts_col else pd.NaT
-            meta.append({"label": lab, "source": srcs[w0], "n_flows": w1 - w0,
+            meta.append({"label": lab, "source": srcs[w0], "file": files[w0], "n_flows": w1 - w0,
                          "attack_frac": round(frac, 4), "t0": first_t})
         start = end
     meta = pd.DataFrame(meta)
@@ -127,9 +145,16 @@ def main() -> None:
 
     if args.split == "temporal":
         if not ts_col or meta["t0"].isna().all():
-            raise SystemExit("--split temporal needs timestamps")
+            raise SystemExit("--split temporal needs timestamps and --order time")
         cut = meta["t0"].quantile(1 - args.test_frac)
         meta["split"] = np.where(meta["t0"] < cut, "train", "test")
+    elif args.split == "file":
+        if not args.train_files:
+            raise SystemExit("--split file needs --train-files")
+        is_train = meta["file"].map(lambda f: any(p in f for p in args.train_files))
+        meta["split"] = np.where(is_train, "train", "test")
+        if is_train.all() or not is_train.any():
+            raise SystemExit("--train-files must match some files but not all")
     else:
         meta["split"] = "train"
         for _, g in meta.groupby("label"):

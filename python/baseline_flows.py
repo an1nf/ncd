@@ -37,6 +37,9 @@ def main() -> None:
         "gbdt-flowstats": HistGradientBoostingClassifier(max_iter=300, random_state=args.seed),
         f"knn{args.k}-flowstats-euclidean": make_pipeline(StandardScaler(), KNeighborsClassifier(n_neighbors=args.k)),
     }
+    if len(set(ytr)) < 2:
+        print("training windows have a single label: skipping supervised baselines")
+        sup = {}
     for name, model in sup.items():
         t = time.perf_counter()
         pred = model.fit(X[tr], ytr).predict(X[te])
