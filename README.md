@@ -18,6 +18,8 @@ NCD(x, y) = (C(xy) - min{C(x), C(y)}) / max{C(x), C(y)}
 
 It needs no hand-made features or format-specific parsers. Real compressors also break the metric axioms, have finite windows and add a fixed cost per object. This project measures those effects.
 
+Theory and design principles (Spanish): [docs/FUNDAMENTOS.md](docs/FUNDAMENTOS.md).
+
 ## Components
 
 - `ncd-core`: zstd, xz, bzip2 and DEFLATE codecs; parallel pairwise and cross matrices; two estimators (`concat` uses `C(xy)`, `conditional` compresses the larger object using the smaller one as a zstd dictionary); window overflow warnings; bounds-checked PE/ELF code section extraction; k-NN, anomaly scores and metrics.
