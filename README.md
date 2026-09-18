@@ -25,7 +25,7 @@ Theory and design principles (Spanish): [docs/FUNDAMENTOS.md](docs/FUNDAMENTOS.m
 - `ncd-core`: zstd, xz, bzip2 and DEFLATE codecs; parallel pairwise and cross matrices; two estimators (`concat` uses `C(xy)`, `conditional` compresses the larger object using the smaller one as a zstd dictionary); window overflow warnings; bounds-checked PE/ELF code section extraction; k-NN, anomaly scores and metrics.
 - `ncd`: command line interface with `dist`, `matrix`, `eval`, `score`, `bench` and `synth`.
 - `ncdthreat`: Python bindings via PyO3. Bytes are borrowed without copying and the GIL is released during compression.
-- `python/`: random or temporal train/test splits, EMBER and flow baselines (GBDT, k-NN, Isolation Forest), CICFlowMeter windowing, NCD evaluation and plots.
+- `python/`: sample fetchers (MalwareBazaar, PyPI), EMBER v3 features, random, temporal or per-file splits, EMBER and flow baselines (GBDT, k-NN, Isolation Forest), CICFlowMeter windowing, NCD evaluation and plots.
 - `flake.nix` and CI: build, tests, clippy, an end-to-end smoke test and `nix flake check`.
 
 ## Usage
@@ -92,36 +92,50 @@ The defaults are 64-flow windows with `concat` for traffic and `conditional` for
 
 ## Real data
 
-### Malware
+Step-by-step guide (Spanish): [docs/DATOS_REALES.md](docs/DATOS_REALES.md). Sources:
 
-NCD needs raw binaries with family labels.
-
-- BODMAS (Yang et al., 2021): 57,293 malware and 77,142 benign PE files, 581 families, timestamps and EMBER features for the same samples.
-- EMBER2024 (Joyce et al., 2025): 6,787 families, but only hashes and features are distributed.
-- MalwareBazaar: individual samples with family signatures.
+- Binaries: MalwareBazaar (`python/fetch_bazaar.py`, needs an abuse.ch Auth-Key), BODMAS (binaries on request), or benign PyPI Windows wheels for a dry run (`python/fetch_pypi_pe.py`).
+- Baseline features: EMBER v3 via thrember (`python/ember_features.py`).
+- Traffic: CIC-IDS2017 `GeneratedLabelledFlows` (TrafficLabelling CSVs keep Source IP and Timestamp), LYCOS-IDS2017 or CSE-CIC-IDS2018.
 
 ```bash
-python python/make_split.py --meta bodmas_metadata.csv --id-col sha --label-col family \
-    --time-col timestamp --protocol temporal --min-per-family 20 --max-per-family 60 \
-    --samples-dir /data/bodmas/raw --link-to corpus/ --out splits.csv
-ncd eval corpus/ --split-file splits.csv -k 1 -m conditional --json results/malware_ncd.json
-python python/baseline_malware.py --npz bodmas.npz --index bodmas_metadata.csv \
-    --split splits.csv --out-dir results/
+python python/fetch_pypi_pe.py --out data/pypi
+python python/make_split.py --meta data/pypi/metadata.csv --id-col sha256 --label-col family \
+    --time-col first_seen --protocol temporal --min-per-family 5 \
+    --samples-dir data/pypi/samples --link-to data/pypi/corpus --out data/pypi/splits.csv
+ncd eval data/pypi/corpus --split-file data/pypi/splits.csv -k 1 -c zstd:9 -m conditional \
+    --json results/malware_ncd.json
+python python/ember_features.py data/pypi/samples --out data/pypi/ember
+python python/baseline_malware.py --features data/pypi/ember.npy --index data/pypi/ember.index.csv \
+    --split data/pypi/splits.csv --k 1 --out-dir results/
 python python/compare.py results/
 ```
 
-The temporal split trains on older samples and tests on newer ones (Pendlebury et al., 2019). Samples are only read as bytes, never executed; keep them in an isolated VM and outside the repository.
-
-### Traffic
-
 ```bash
-python python/prepare_flows.py TrafficLabelling/*.csv --out flows/ --window 64
+python python/prepare_flows.py TrafficLabelling/*.csv --out flows/ --window 64 --order rows \
+    --split file --train-files Monday --max-per-label 500
 python python/baseline_flows.py flows/ --out-dir results/
-python python/eval_flows_ncd.py flows/ --codec zstd:19 --max-refs 2000 --out-dir results/
-python python/compare.py results/
+python python/eval_flows_ncd.py flows/ --codec zstd:9 --max-refs 2000 --out-dir results/
 ```
 
-The anomaly detector is fitted on benign training windows only. CIC-IDS2017 has known feature and labeling errors (Engelen et al., 2021; Rosay et al., 2022), so LYCOS-IDS2017 is preferable. `--drop-port` removes the destination port.
+Splits are temporal or by capture file, so models are tested on data newer than what they saw (Pendlebury et al., 2019). Samples are only read as bytes, never executed; keep them in an isolated VM and outside the repository.
+
+### Dry run on real binaries
+
+`fetch_pypi_pe.py --until 2026-10-31` gives 125 Windows PE files from 8 PyPI projects (numpy, pillow, lxml, pywin32, aiohttp, pyzmq, psutil, regex), 5 releases each since 2019. The family is the project and the split is temporal by release date (85 train, 40 test). This is benign software, so it checks the PE path and the protocol, not malware detection.
+
+| model | input | accuracy | macro-F1 | time |
+|---|---|---:|---:|---:|
+| GBDT | EMBER v3 | 0.950 | 0.956 | 20 s |
+| 1-NN Euclidean | EMBER v3 | 0.475 | 0.615 | <1 s |
+| 1-NN NCD, zstd:3 concat | code sections | 0.800 | 0.856 | 5 s |
+| 1-NN NCD, zstd:9 conditional | whole file | 0.800 | 0.851 | 30 s |
+| 1-NN NCD, zstd:9 conditional | code sections | 0.700 | 0.744 | 22 s |
+| 1-NN NCD, zstd:19 conditional | code sections | 0.725 | 0.797 | 240 s |
+
+One test sample is 2.5 points of accuracy, so the NCD settings are within noise of each other. NCD beats Euclidean k-NN on the EMBER features but not GBDT. All 125 files parsed as PE with no fallback to raw bytes. The structure is much weaker than in the synthetic corpus: dark cells are mostly the same module across releases.
+
+<p align="center"><img src="docs/img/pypi_heatmap.png" width="60%" alt="NCD matrix of 125 PyPI PE files grouped by project"></p>
 
 ## Limitations
 
