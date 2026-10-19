@@ -1,0 +1,18 @@
+[package]
+name = "ncd-core"
+description = "Normalized Compression Distance for malware-family and network-anomaly classification"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+bzip2 = "0.6.1"
+flate2 = "1.1.10"
+goblin = "0.10.7"
+rayon = "1.12.0"
+thiserror = "2.0.21"
+xz2 = { version = "0.1.7", features = ["static"] }
+zstd = "0.14.3"
