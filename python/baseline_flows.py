@@ -1,14 +1,5 @@
 #!/usr/bin/env python3
-"""Classical baselines on the flow windows produced by ``prepare_flows.py``.
-
-Same windows, same split as the NCD evaluation; inputs are per-window
-aggregate statistics (mean/std/min/max of every CICFlowMeter feature).
-
-* supervised: gradient-boosted trees, and k-NN (Euclidean, standardized);
-* anomaly detection (trained on benign training windows only):
-  Isolation Forest, and mean distance to the k nearest benign windows —
-  the Euclidean twin of the NCD anomaly score.
-"""
+"""Baselines on per-window flow statistics: GBDT, k-NN, Isolation Forest, k-NN distance."""
 
 from __future__ import annotations
 
@@ -36,13 +27,12 @@ def main() -> None:
 
     meta = pd.read_csv(args.data / "windows.csv")
     X = np.load(args.data / "features.npy")
-    X = np.sign(X) * np.log1p(np.abs(X))  # heavy-tailed counters → log scale
+    X = np.sign(X) * np.log1p(np.abs(X))  # signed log
     tr = (meta["split"] == "train").to_numpy()
     te = ~tr
     ytr, yte = meta.loc[tr, "label"].to_numpy(), meta.loc[te, "label"].to_numpy()
     labels = sorted(meta["label"].unique())
 
-    # ---- supervised --------------------------------------------------------
     sup = {
         "gbdt-flowstats": HistGradientBoostingClassifier(max_iter=300, random_state=args.seed),
         f"knn{args.k}-flowstats-euclidean": make_pipeline(StandardScaler(), KNeighborsClassifier(n_neighbors=args.k)),
@@ -56,7 +46,7 @@ def main() -> None:
                     metrics=metrics, seconds=time.perf_counter() - t,
                     predictions=[{"id": i, "true": a, "pred": b} for i, a, b in zip(meta.loc[te, "id"], yte, pred)])
 
-    # ---- anomaly detection (benign-only training) --------------------------
+    # anomaly models see benign training windows only
     ben = tr & (meta["label"] == BENIGN).to_numpy()
     scaler = StandardScaler().fit(X[ben])
     Xb, Xt = scaler.transform(X[ben]), scaler.transform(X[te])

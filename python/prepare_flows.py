@@ -1,30 +1,7 @@
 #!/usr/bin/env python3
-"""Turn CICFlowMeter-style CSVs (CIC-IDS2017, LYCOS-IDS2017, CSE-CIC-IDS2018)
-into byte objects for NCD plus aggregate features for the baseline.
-
-NCD needs *sequences* to find shared structure, so flows are grouped into
-windows of ``--window`` consecutive flows from the same source host (ordered
-by timestamp when the CSV has one; otherwise by row order within each file).
-Each flow is encoded as one byte per feature — its quantile bin, fitted on
-training flows only to avoid leakage — followed by a 0xFF separator. Repeated
-behaviour (a scan, a flood, a brute-force loop) becomes a repeated byte
-pattern that LZ-family compressors exploit.
-
-Outputs in ``--out``:
-
-* ``<label>/<window_id>.bin`` — one object per window (readable by
-  ``ncd eval``/``ncd score`` and ``eval_flows_ncd.py``);
-* ``windows.csv`` — id, label, split, source, n_flows, attack_frac;
-* ``features.npy`` — per-window mean/std/min/max of the raw features, row-aligned
-  with ``windows.csv``, for ``baseline_flows.py``.
-
-Window label: ``benign`` if it contains no attack flow; the majority attack
-label if attack flows are at least ``--min-attack-frac`` of the window;
-ambiguous windows in between are dropped (and counted).
-
-Known dataset issues (feature-calculation bugs and label doubts in the
-original CIC-IDS2017 CSVs) are documented by Engelen et al. (2021) and
-Rosay et al. (2022); prefer a corrected release when possible.
+"""CICFlowMeter CSVs to byte windows for NCD and aggregate features for baselines.
+One byte per feature (quantile bin fitted on train flows), 0xFF between flows,
+--window consecutive flows per source host.
 """
 
 from __future__ import annotations
@@ -52,7 +29,7 @@ def read_csvs(paths: list[Path]) -> pd.DataFrame:
         df["__row"] = np.arange(len(df))
         frames.append(df)
     df = pd.concat(frames, ignore_index=True)
-    # CIC-IDS2017 ships duplicated columns ("Fwd Header Length.1")
+    # duplicated columns, e.g. "Fwd Header Length.1"
     df = df.loc[:, [c for c in df.columns if not c.endswith(".1")]]
     return df
 
@@ -98,7 +75,6 @@ def main() -> None:
     feats[~np.isfinite(feats)] = 0.0
     print(f"{len(feat_cols)} numeric features")
 
-    # ---- windows -------------------------------------------------------
     df["__src"] = df[src_col].astype(str) if src_col else "all"
     if ts_col:
         df["__t"] = pd.to_datetime(df[ts_col], errors="coerce", dayfirst=True)
@@ -115,7 +91,7 @@ def main() -> None:
     start = 0
     n = len(order)
     while start < n:
-        # contiguous run of the same source (and file when no timestamps)
+        # run of one source (and one file without timestamps)
         end = start
         while end < n and srcs[end] == srcs[start] and (ts_col or files[end] == files[start]):
             end += 1
@@ -149,7 +125,6 @@ def main() -> None:
         meta = meta.loc[keep].reset_index(drop=True)
         windows = [windows[i] for i in keep]
 
-    # ---- split -------------------------------------------------------------
     if args.split == "temporal":
         if not ts_col or meta["t0"].isna().all():
             raise SystemExit("--split temporal needs timestamps")
@@ -161,7 +136,7 @@ def main() -> None:
             k = min(max(int(round(len(g) * args.test_frac)), 1), max(len(g) - 1, 0))
             meta.loc[rng.permutation(g.index)[:k], "split"] = "test"
 
-    # ---- quantile bins fitted on training flows only ------------------------
+    # bins fitted on training flows only
     train_rows = np.concatenate([w for w, s in zip(windows, meta["split"]) if s == "train"])
     qs = np.linspace(0, 1, args.bins + 1)[1:-1]
     edges = [np.unique(np.quantile(feats[train_rows, j], qs)) for j in range(feats.shape[1])]
@@ -169,7 +144,6 @@ def main() -> None:
     for j, e in enumerate(edges):
         binned[:, j] = np.searchsorted(e, feats[:, j], side="right")
 
-    # ---- write ------------------------------------------------------------
     args.out.mkdir(parents=True, exist_ok=True)
     agg = np.empty((len(windows), 4 * feats.shape[1]), dtype=np.float32)
     sep = np.full((1,), 0xFF, dtype=np.uint8)

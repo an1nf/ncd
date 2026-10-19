@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
-"""Collect result JSONs (Rust ``ncd eval --json`` and the Python scripts)
-into one Markdown table, plus ROC curves for the anomaly-detection results.
-"""
+"""Aggregate result JSONs into a Markdown table and ROC curves."""
 
 from __future__ import annotations
 
@@ -17,8 +15,7 @@ from style import plt
 
 
 def describe(doc: dict) -> tuple[str, str]:
-    """(task, model) for both JSON flavours."""
-    if "codec" in doc:  # Rust CLI
+    if "codec" in doc:  # from ncd eval
         return "malware-family", f"ncd-{doc['codec'].replace(':', '')}-{doc['method']}-knn{doc['k']}"
     return doc.get("task", "?"), doc.get("model", "?")
 
@@ -42,7 +39,7 @@ def main() -> None:
         if doc.get("scores") is not None and doc.get("auc") is not None:
             rocs.append((model, doc["labels"], np.asarray(doc["scores"]), doc["auc"]))
 
-    fmt = lambda v, p=4: "—" if v is None else f"{v:.{p}f}"  # noqa: E731
+    fmt = lambda v, p=4: "-" if v is None else f"{v:.{p}f}"  # noqa: E731
     lines = ["| task | model | accuracy | macro-F1 | ROC AUC | seconds |", "|---|---|---:|---:|---:|---:|"]
     for task, model, acc, f1, auc, secs in sorted(rows, key=lambda r: (r[0], -(r[3] or r[4] or 0))):
         lines.append(f"| {task} | {model} | {fmt(acc)} | {fmt(f1)} | {fmt(auc)} | {fmt(secs, 1)} |")

@@ -1,4 +1,4 @@
-"""Matplotlib styling: recessive axes, fixed categorical order, one-hue ramp."""
+"""Matplotlib style."""
 
 from __future__ import annotations
 
@@ -15,13 +15,11 @@ MUTED = "#898781"
 GRID = "#e1e0d9"
 AXIS = "#c3c2b7"
 
-# Categorical hues, assigned in this order and never cycled.
 CATEGORICAL = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"]
-NEUTRAL = "#898781"  # for "benign" / reference group
+NEUTRAL = "#898781"
 
-# Sequential blue ramp, light → dark (steps 100…700).
 BLUE_RAMP = ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b"]
-SIMILARITY_CMAP = LinearSegmentedColormap.from_list("ncd", BLUE_RAMP[::-1])  # small distance = dark
+SIMILARITY_CMAP = LinearSegmentedColormap.from_list("ncd", BLUE_RAMP[::-1])
 
 
 def apply() -> None:
@@ -38,7 +36,6 @@ def apply() -> None:
 
 
 def colors_for(labels: list[str]) -> dict[str, str]:
-    """Stable label → color map: benign is neutral, others take slots in order."""
     out, slot = {}, 0
     for lab in sorted(labels):
         if lab == "benign":
@@ -47,5 +44,5 @@ def colors_for(labels: list[str]) -> dict[str, str]:
             out[lab] = CATEGORICAL[slot]
             slot += 1
         else:
-            out[lab] = NEUTRAL  # beyond 8 classes: fold into "other"
+            out[lab] = NEUTRAL
     return out

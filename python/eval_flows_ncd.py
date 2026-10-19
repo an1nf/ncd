@@ -1,12 +1,5 @@
 #!/usr/bin/env python3
-"""NCD on flow windows via the Rust core (``ncdthreat`` bindings).
-
-* supervised: k-NN over NCD(test window, train window);
-* anomaly detection: mean NCD to the k nearest *benign* training windows,
-  so no attack data is needed to fit it (ROC AUC, positives = attacks).
-
-Build the bindings first: ``maturin develop --release -m crates/ncd-py/Cargo.toml``.
-"""
+"""NCD k-NN and anomaly scores (benign references only) on flow windows."""
 
 from __future__ import annotations
 
@@ -25,8 +18,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("data", type=Path, help="output dir of prepare_flows.py")
     ap.add_argument("--codec", default="zstd:19")
-    # concat by default: from 32 flows/window up it gives the better k-NN results
-    # with equal anomaly AUC (python/ablation_window.py, README finding 4).
+    # concat beats conditional from 32 flows/window up (ablation_window.py)
     ap.add_argument("--method", default="concat", choices=["concat", "concat-sym", "conditional"])
     ap.add_argument("--k", type=int, default=5)
     ap.add_argument("--max-refs", type=int, default=None, help="subsample benign references (cost ∝ refs)")
@@ -42,7 +34,6 @@ def main() -> None:
     tag = f"ncd-{args.codec.replace(':', '')}-{args.method}"
     print(f"{len(tr)} train / {len(te)} test windows; codec {args.codec}, method {args.method}")
 
-    # ---- supervised k-NN ---------------------------------------------------
     t = time.perf_counter()
     D = nt.cross([objs[i] for i in te], [objs[i] for i in tr], codec=args.codec, method=args.method)
     pred = knn_predict(D, labels[tr], args.k)
@@ -53,7 +44,6 @@ def main() -> None:
                 task="flow-classification", metrics=metrics, seconds=secs,
                 predictions=[{"id": meta["id"][i], "true": labels[i], "pred": p} for i, p in zip(te, pred)])
 
-    # ---- anomaly score vs benign references --------------------------------
     refs = tr[labels[tr] == BENIGN]
     if args.max_refs and len(refs) > args.max_refs:
         refs = np.random.default_rng(args.seed).choice(refs, args.max_refs, replace=False)

@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""Visualize an NCD matrix written by ``ncd matrix``.
-
-Produces ``<prefix>_heatmap.png`` (samples grouped by label; dark = similar)
-and ``<prefix>_mds.png`` (2-D metric MDS embedding of the distances).
-"""
+"""Heatmap and MDS embedding of an `ncd matrix` output."""
 
 from __future__ import annotations
 
@@ -40,7 +36,6 @@ def main() -> None:
     names = sorted(set(labels))
     colors = style.colors_for(names)
 
-    # ---- heatmap ---------------------------------------------------------------
     fig, ax = plt.subplots(figsize=(7.2, 6.2))
     im = ax.imshow(D_sorted, cmap=style.SIMILARITY_CMAP, vmin=0, vmax=max(1.0, np.percentile(D, 99)),
                    interpolation="nearest")
@@ -64,11 +59,10 @@ def main() -> None:
     fig.savefig(f"{prefix}_heatmap.png", dpi=160, bbox_inches="tight")
     plt.close(fig)
 
-    # ---- MDS ---------------------------------------------------------------
     Ds = (D + D.T) / 2
     np.fill_diagonal(Ds, 0)
     Ds = np.clip(Ds, 0, None)
-    with warnings.catch_warnings():  # parameter renames across sklearn versions
+    with warnings.catch_warnings():  # sklearn MDS parameter deprecations
         warnings.simplefilter("ignore", FutureWarning)
         xy = MDS(n_components=2, dissimilarity="precomputed", random_state=args.seed,
                  normalized_stress="auto", n_init=4).fit_transform(Ds)

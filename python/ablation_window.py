@@ -1,12 +1,5 @@
 #!/usr/bin/env python3
-"""Ablation: how many flows per window does NCD need?
-
-Fabricates CICFlowMeter-like traffic (the generator from smoke_test.py,
-fixed seed), builds windows of several sizes and reports NCD k-NN accuracy
-and anomaly AUC for the `concat` and `conditional` estimators, next to the
-Euclidean k-NN baseline on aggregate features. Fabricated data: the point is
-the *trend* with object size, not the absolute numbers.
-"""
+"""NCD k-NN F1 and anomaly AUC vs. flow window size, on generated traffic."""
 
 from __future__ import annotations
 

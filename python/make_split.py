@@ -1,29 +1,7 @@
 #!/usr/bin/env python3
-"""Build a train/test split for malware-family classification.
-
-Input is a metadata CSV with a sample id (sha256), a family label and,
-optionally, a first-seen timestamp — e.g. BODMAS' ``bodmas_metadata.csv``.
-The same split file is consumed by the NCD evaluation (``ncd eval
---split-file``) and by ``baseline_malware.py``, so both models see exactly the
-same samples.
-
-Two protocols:
-
-* ``random``   — stratified by family. Optimistic: variants of the same
-  campaign land on both sides.
-* ``temporal`` — train on samples first seen before the cut-off, test on the
-  rest; test families never seen in training are dropped (closed world).
-  Closer to deployment (Pendlebury et al., "TESSERACT", USENIX Sec 2019).
-
-Optionally materializes a labelled corpus for the Rust CLI as *symlinks*
-``CORPUS/<family>/<sha256>`` pointing into a flat sample store — malware is
-never copied around more than needed.
-
-Example (BODMAS)::
-
-    python make_split.py --meta bodmas_metadata.csv --id-col sha --label-col family \\
-        --time-col timestamp --protocol temporal --min-per-family 20 --max-per-family 60 \\
-        --samples-dir /data/bodmas/raw --link-to corpus/ --out splits.csv
+"""Train/test split shared by `ncd eval` and the baselines.
+random: stratified by family. temporal: split by first-seen time, unseen test families dropped.
+--link-to builds CORPUS/<family>/<id> symlinks.
 """
 
 from __future__ import annotations

@@ -1,15 +1,5 @@
 #!/usr/bin/env python3
-"""End-to-end smoke test of the whole pipeline on fabricated data.
-
-Real malware and the real CIC-IDS CSVs are not redistributable, so this
-script fabricates stand-ins with the same *shape* (file layout, column
-names, CICFlowMeter quirks such as leading spaces, duplicated columns and a
-Latin-1 label) and runs every script on them. It checks that the plumbing
-works — the numbers it prints say nothing about real-world performance.
-
-Requires the `ncd` binary (cargo build --release) and the `ncdthreat`
-bindings (maturin develop --release -m crates/ncd-py/Cargo.toml).
-"""
+"""End-to-end run of every script on generated data. Needs the `ncd` binary and `ncdthreat`."""
 
 from __future__ import annotations
 
@@ -37,7 +27,7 @@ def py(script: str, *args) -> None:
 
 
 def fake_flows(path: Path, rng: np.random.Generator) -> None:
-    """CICFlowMeter-like CSV: 3 benign hosts + DoS, port scan, web brute force."""
+    """3 benign hosts, DoS, port scan and web brute force."""
     rows = []
     t0 = pd.Timestamp("2017-07-05 09:00")
 
@@ -72,7 +62,7 @@ def main() -> None:
     ap.add_argument("--keep", type=Path, default=None, help="keep outputs in this dir")
     args = ap.parse_args()
     if not args.ncd.exists():
-        raise SystemExit(f"{args.ncd} not found — run `cargo build --release` first")
+        raise SystemExit(f"{args.ncd} not found, run `cargo build --release` first")
     work = args.keep or Path(tempfile.mkdtemp(prefix="ncd-smoke-"))
     if work.exists() and args.keep:
         shutil.rmtree(work)
@@ -80,7 +70,6 @@ def main() -> None:
     res = work / "results"
     rng = np.random.default_rng(7)
 
-    # ---- malware-family track -----------------------------------------------
     run(args.ncd, "synth", work / "synth", "--families", "4", "--per-family", "12", "--benign", "0",
         "--template-len", "8000")
     flat = work / "flat"
@@ -96,7 +85,7 @@ def main() -> None:
     run(args.ncd, "eval", work / "corpus", "--split-file", work / "splits.csv", "-k", "1", "-m", "conditional",
         "--json", res / "malware_ncd.json")
 
-    # byte-histogram + size features stand in for EMBER vectors
+    # byte histogram stands in for EMBER features
     ids = sorted(p.name for p in flat.iterdir())
     X = np.stack([np.r_[np.bincount(np.frombuffer((flat / i).read_bytes(), np.uint8), minlength=256) / (flat / i).stat().st_size,
                         np.log((flat / i).stat().st_size)] for i in ids]).astype(np.float32)
@@ -108,8 +97,6 @@ def main() -> None:
     run(args.ncd, "matrix", work / "corpus", "-o", work / "malware.npy", "-c", "zstd:9")
     py("plot_matrix.py", work / "malware.npy", "--title", "Synthetic families")
 
-    # ---- network track ---------------------------------------------------------
-    # several "captures" so 64-flow windows still yield enough samples
     frames = []
     for rep in range(4):
         fake_flows(work / f"flows{rep}.csv", rng)
@@ -122,8 +109,7 @@ def main() -> None:
     py("baseline_flows.py", win, "--out-dir", res)
     py("eval_flows_ncd.py", win, "--codec", "zstd:9", "--out-dir", res)
 
-    # CLI anomaly scoring: references = benign *training* windows only,
-    # queries = test windows (symlinked layouts, no copies, no leakage).
+    # refs: benign train windows; queries: test windows
     meta_w = pd.read_csv(win / "windows.csv")
     for row in meta_w.itertuples():
         if row.split == "train" and row.label != "benign":
@@ -135,7 +121,7 @@ def main() -> None:
         "-o", work / "scores.csv", "-c", "zstd:9", "-v", "whole")
 
     py("compare.py", res, "--out", res / "summary.md")
-    print(f"\nsmoke test OK — outputs in {work}")
+    print(f"\nsmoke test OK, outputs in {work}")
 
 
 if __name__ == "__main__":

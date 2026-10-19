@@ -1,4 +1,4 @@
-"""Shared helpers: metrics in the same JSON schema the Rust CLI emits."""
+"""Metrics and result JSON, same schema as the Rust CLI."""
 
 from __future__ import annotations
 
@@ -14,13 +14,11 @@ BENIGN = "benign"
 
 
 def sanitize_label(label: str) -> str:
-    """'Web Attack \x96 Brute Force' -> 'web_attack_brute_force'."""
     s = re.sub(r"[^0-9a-zA-Z]+", "_", str(label).strip().lower()).strip("_")
     return s or "unknown"
 
 
 def report_dict(y_true: Sequence[str], y_pred: Sequence[str], labels: Sequence[str] | None = None) -> dict:
-    """Accuracy, macro/weighted F1, per-class metrics and confusion matrix."""
     y_true = np.asarray(y_true, dtype=object)
     y_pred = np.asarray(y_pred, dtype=object)
     if labels is None:
@@ -48,7 +46,7 @@ def auc_vs_benign(labels: Iterable[str], scores: np.ndarray) -> float | None:
 
 
 def knn_predict(dist: np.ndarray, train_labels: Sequence[str], k: int) -> list[str]:
-    """Majority vote of the k nearest columns; ties go to the nearest class."""
+    """Ties go to the class with the nearest member."""
     train_labels = np.asarray(train_labels, dtype=object)
     k = min(k, dist.shape[1])
     nn = np.argpartition(dist, k - 1, axis=1)[:, :k]
