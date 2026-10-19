@@ -1,8 +1,4 @@
-//! `ncd` — compression-based threat classification from the command line.
-//!
-//! Corpora are directories laid out as `ROOT/<label>/<sample>`; the sample's
-//! file stem (usually its SHA-256) is its id. Samples are only ever read as
-//! bytes — never executed.
+//! Corpus layout: `ROOT/<label>/<sample>`; the file stem is the sample id.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
@@ -26,7 +22,7 @@ use serde_json::json;
     about = "Normalized Compression Distance for malware-family and network-anomaly classification"
 )]
 struct Cli {
-    /// Worker threads (default: all cores).
+    /// Worker threads [default: all cores]
     #[arg(long, global = true)]
     threads: Option<usize>,
     #[command(subcommand)]
@@ -35,79 +31,76 @@ struct Cli {
 
 #[derive(Args, Clone)]
 struct Opts {
-    /// Compressor: zstd[:1-22], xz[:0-9], bzip2[:1-9], deflate[:0-9].
+    /// zstd[:1-22], xz[:0-9], bzip2[:1-9], deflate[:0-9]
     #[arg(long, short, default_value = "zstd:19")]
     codec: Codec,
-    /// Joint-complexity estimator: concat, concat-sym, conditional (zstd only).
+    /// concat, concat-sym, conditional (zstd only)
     #[arg(long, short, default_value = "concat")]
     method: Method,
-    /// Bytes compared: code (executable sections), no-overlay, whole.
+    /// code, no-overlay, whole
     #[arg(long, short, default_value = "code")]
     view: View,
-    /// Truncate each object to this many bytes after extraction.
+    /// Truncate each object after extraction
     #[arg(long)]
     max_bytes: Option<usize>,
 }
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// NCD between two files.
+    /// NCD of two files
     Dist {
         a: PathBuf,
         b: PathBuf,
         #[command(flatten)]
         opts: Opts,
     },
-    /// Full pairwise distance matrix of a corpus, saved as .npy + index CSV.
+    /// Pairwise matrix as .npy plus index CSV
     Matrix {
         dir: PathBuf,
-        /// Output .npy path (an `<out>.index.csv` with id,label is written too).
+        /// Output .npy; also writes <out>.index.csv
         #[arg(long, short)]
         out: PathBuf,
         #[command(flatten)]
         opts: Opts,
     },
-    /// k-NN classification of a labelled corpus (leave-one-out or hold-out).
+    /// k-NN evaluation, leave-one-out or hold-out
     Eval {
         dir: PathBuf,
         #[arg(long, short, default_value_t = 1)]
         k: usize,
-        /// Hold-out fraction for a stratified split; 0 means leave-one-out.
+        /// Stratified hold-out fraction; 0 = leave-one-out
         #[arg(long, default_value_t = 0.0)]
         test_frac: f64,
-        /// CSV with `id,split` (train/test), e.g. from python/make_split.py.
-        /// Overrides --test-frac; lets NCD and the baseline share one split.
+        /// CSV with id,split (train/test); overrides --test-frac
         #[arg(long)]
         split_file: Option<PathBuf>,
         #[arg(long, default_value_t = 2026)]
         seed: u64,
-        /// Write metrics and per-sample predictions as JSON.
+        /// Metrics and predictions as JSON
         #[arg(long)]
         json: Option<PathBuf>,
         #[command(flatten)]
         opts: Opts,
     },
-    /// Anomaly scores: mean NCD from each query to its k nearest references.
+    /// Mean NCD to the k nearest references
     Score {
-        /// Reference corpus (e.g. benign-only traffic windows).
+        /// Reference corpus, e.g. benign only
         #[arg(long)]
         refs: PathBuf,
-        /// Query corpus; if labelled, ROC AUC treats every label except
-        /// --normal-label as positive.
+        /// Query corpus; labels other than --normal-label are positives for ROC AUC
         #[arg(long)]
         queries: PathBuf,
         #[arg(long, short, default_value_t = 5)]
         k: usize,
         #[arg(long, default_value = "benign")]
         normal_label: String,
-        /// Output CSV: id,label,score.
+        /// Output CSV: id,label,score
         #[arg(long, short)]
         out: PathBuf,
         #[command(flatten)]
         opts: Opts,
     },
-    /// Compare compressors on a corpus: speed, self-distance, window
-    /// overflows and leave-one-out 1-NN accuracy.
+    /// Compare codecs: throughput, NCD(x,x), window overflows, 1-NN accuracy
     Bench {
         dir: PathBuf,
         #[arg(
@@ -123,7 +116,7 @@ enum Cmd {
         #[arg(long)]
         max_bytes: Option<usize>,
     },
-    /// Generate the synthetic family corpus used by tests and the demo.
+    /// Write the synthetic corpus
     Synth {
         out: PathBuf,
         #[arg(long, default_value_t = 6)]
@@ -141,7 +134,6 @@ enum Cmd {
     },
 }
 
-/// A loaded corpus: parallel vectors of ids, label indices and bytes.
 struct Corpus {
     ids: Vec<String>,
     labels: Vec<u32>,
@@ -161,7 +153,7 @@ impl Corpus {
             .sort_by_file_name()
         {
             let e = e?;
-            // `path().is_file()` follows symlinks (make_split.py --link-to).
+            // follows symlinks
             if !e.path().is_file() || e.file_name().to_string_lossy().starts_with('.') {
                 continue;
             }
@@ -280,7 +272,6 @@ fn report_json(r: &Report) -> serde_json::Value {
     })
 }
 
-/// Creates the parent directory of an output path and opens it for writing.
 fn create(path: &Path) -> Result<BufWriter<fs::File>> {
     if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
         fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
@@ -290,8 +281,7 @@ fn create(path: &Path) -> Result<BufWriter<fs::File>> {
     ))
 }
 
-/// Reads `id,split` rows; extra columns are ignored, `sha256` is accepted
-/// as the id column name.
+/// Columns `id` (or `sha256`) and `split`; others ignored.
 fn read_split_file(path: &Path) -> Result<HashMap<String, bool>> {
     let text = fs::read_to_string(path).with_context(|| path.display().to_string())?;
     let mut lines = text.lines();
@@ -323,13 +313,12 @@ fn read_split_file(path: &Path) -> Result<HashMap<String, bool>> {
                 n + 2
             ),
         };
-        // hashes: compare case-insensitively (make_split.py lower-cases ids)
         out.insert(id.to_lowercase(), is_test);
     }
     Ok(out)
 }
 
-/// Stratified hold-out split with a seeded Fisher–Yates shuffle per class.
+/// Seeded Fisher-Yates per class.
 fn stratified_split(labels: &[u32], test_frac: f64, seed: u64) -> (Vec<usize>, Vec<usize>) {
     let mut by_class: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
     for (i, &l) in labels.iter().enumerate() {
@@ -551,7 +540,7 @@ fn main() -> Result<()> {
             for codec in codecs {
                 if method == Method::Conditional && !codec.supports_conditional() {
                     println!(
-                        "| {codec} | — | — | — | — | n/a ({}) | — | — |",
+                        "| {codec} | - | - | - | - | n/a ({}) | - | - |",
                         method.name()
                     );
                     continue;
@@ -580,7 +569,7 @@ fn main() -> Result<()> {
                         metrics::report(&c.labels, &knn::loo_predict(&m, &c.labels, 1), &c.names);
                     (format!("{:.4}", r.accuracy), format!("{:.4}", r.macro_f1))
                 } else {
-                    ("—".into(), "—".into())
+                    ("-".into(), "-".into())
                 };
                 println!(
                     "| {codec} | {:.1} | {ratio:.3} | {self_mean:.4} | {over} / {} | {mt:.2?} | {acc} | {f1} |",
@@ -639,7 +628,6 @@ mod tests {
         for c in 0..3 {
             assert_eq!(test.iter().filter(|&&i| labels[i] == c).count(), 3);
         }
-        // a singleton class stays in training
         assert!(train.contains(&30) && !test.contains(&30));
         assert_eq!(
             stratified_split(&labels, 0.3, 7),

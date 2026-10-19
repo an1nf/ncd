@@ -1,4 +1,4 @@
-//! Minimal NumPy `.npy` (format version 1.0) writer for `f32` matrices.
+//! `.npy` v1.0 writer.
 
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
@@ -6,11 +6,10 @@ use std::path::Path;
 
 use crate::ncd::DistMatrix;
 
-/// Writes a little-endian `float32` array of shape `(rows, cols)`.
 pub fn write_f32<W: Write>(mut w: W, rows: usize, cols: usize, data: &[f32]) -> io::Result<()> {
     assert_eq!(rows * cols, data.len());
     let dict = format!("{{'descr': '<f4', 'fortran_order': False, 'shape': ({rows}, {cols}), }}");
-    // magic(6) + version(2) + header_len(2) + dict + padding + '\n' ≡ 0 mod 64
+    // header total length must be a multiple of 64
     let unpadded = 10 + dict.len() + 1;
     let pad = (64 - unpadded % 64) % 64;
     let header_len = (dict.len() + pad + 1) as u16;

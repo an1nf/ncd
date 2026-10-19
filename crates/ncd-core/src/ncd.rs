@@ -1,8 +1,4 @@
-//! Normalized Compression Distance: single pairs, pairwise and cross matrices.
-//!
-//! Every `C(x)` is computed once and cached; only the `C(xy)` (or `C(y|x)`)
-//! terms are computed per pair. Rows are distributed over threads with rayon,
-//! each thread owning its own compression context.
+//! NCD matrices. `C(x)` is cached; rows run in parallel, one context per thread.
 
 use std::io;
 use std::str::FromStr;
@@ -12,19 +8,15 @@ use rayon::prelude::*;
 use crate::codec::{Codec, Worker, zstd_compressor, zstd_len};
 use crate::{Error, Result};
 
-/// How the joint/conditional complexity term is estimated.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Method {
-    /// `C(xy)` for the upper triangle only. Real compressors are not exactly
-    /// symmetric, so `NCD(x,y)` and `NCD(y,x)` can differ slightly.
+    /// `C(xy)`, upper triangle only.
     #[default]
     Concat,
-    /// `(C(xy) + C(yx)) / 2` — symmetric by construction, twice the cost.
+    /// `(C(xy) + C(yx)) / 2`.
     ConcatSym,
-    /// zstd only: compress the more complex object using the simpler one as
-    /// a raw-content dictionary, estimating `max{K(x|y), K(y|x)}` directly
-    /// (the numerator of the normalized information distance). The
-    /// dictionary is prepared once per object and reused across a whole row.
+    /// zstd only. `C(y|x)` with the simpler object as a raw-content dictionary,
+    /// prepared once per row.
     Conditional,
 }
 
@@ -50,7 +42,7 @@ impl FromStr for Method {
     }
 }
 
-/// Dense row-major `f32` distance matrix.
+/// Row-major `f32` matrix.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DistMatrix {
     rows: usize,
@@ -88,7 +80,6 @@ impl DistMatrix {
         self.data
     }
 
-    /// Selects a sub-matrix (e.g. train×train out of a full pairwise matrix).
     pub fn select(&self, rows: &[usize], cols: &[usize]) -> DistMatrix {
         let mut data = Vec::with_capacity(rows.len() * cols.len());
         for &i in rows {
@@ -103,10 +94,7 @@ impl DistMatrix {
     }
 }
 
-/// `NCD = (C(xy) − min{C(x), C(y)}) / max{C(x), C(y)}`.
-///
-/// Values are not clamped: slightly negative or >1 results are possible with
-/// real compressors and are a useful diagnostic of compressor quality.
+/// Not clamped: values outside [0, 1] are a compressor diagnostic.
 pub fn ncd_from_lens(cx: usize, cy: usize, cxy: usize) -> f64 {
     let (lo, hi) = if cx <= cy { (cx, cy) } else { (cy, cx) };
     if hi == 0 {
@@ -115,7 +103,6 @@ pub fn ncd_from_lens(cx: usize, cy: usize, cxy: usize) -> f64 {
     (cxy as f64 - lo as f64) / hi as f64
 }
 
-/// Distance between two objects with the default [`Method::Concat`].
 pub fn ncd(codec: Codec, x: &[u8], y: &[u8]) -> Result<f64> {
     let mut w = codec.worker()?;
     let cx = w.compressed_len(x)?;
@@ -124,7 +111,6 @@ pub fn ncd(codec: Codec, x: &[u8], y: &[u8]) -> Result<f64> {
     Ok(ncd_from_lens(cx, cy, cxy))
 }
 
-/// Distance between two objects with an explicit [`Method`].
 pub fn ncd_with(codec: Codec, method: Method, x: &[u8], y: &[u8]) -> Result<f64> {
     let m = cross(codec, &[x], &[y], method)?;
     Ok(m.get(0, 0) as f64)
@@ -134,7 +120,6 @@ fn clone_err(e: &io::Error) -> Error {
     Error::Io(io::Error::new(e.kind(), e.to_string()))
 }
 
-/// `C(x)` for every object, in parallel.
 pub fn compressed_lens<T: AsRef<[u8]> + Sync>(codec: Codec, objs: &[T]) -> Result<Vec<usize>> {
     objs.par_iter()
         .map_init(
@@ -164,8 +149,7 @@ fn zstd_level(codec: Codec) -> i32 {
     }
 }
 
-/// `C(target | anchor)` for every target, with `anchor` as a prepared
-/// raw-content zstd dictionary.
+/// `C(target | anchor)` for each target.
 fn conditional_row<'t>(
     level: i32,
     anchor: &[u8],
@@ -179,13 +163,12 @@ fn conditional_row<'t>(
         .collect()
 }
 
-/// Strict total order on objects by (complexity, index): the "anchor" of a
-/// pair is the simpler object, whose dictionary conditions the other.
+/// Order by (C(x), index); the smaller object is the dictionary.
 fn simpler(ca: usize, a: usize, cb: usize, b: usize) -> bool {
     (ca, a) < (cb, b)
 }
 
-/// Full symmetric `n×n` NCD matrix. The diagonal is set to 0.
+/// Symmetric `n×n` matrix, zero diagonal.
 pub fn pairwise<T: AsRef<[u8]> + Sync>(
     codec: Codec,
     objs: &[T],
@@ -196,7 +179,6 @@ pub fn pairwise<T: AsRef<[u8]> + Sync>(
     let lens = compressed_lens(codec, objs)?;
     let mut data = vec![0f32; n * n];
 
-    // Each row yields (j, distance) for the pairs it owns.
     let rows: Vec<Vec<(usize, f32)>> = match method {
         Method::Concat | Method::ConcatSym => (0..n)
             .into_par_iter()
@@ -259,7 +241,7 @@ fn ratio(num: usize, den: usize) -> f32 {
     }
 }
 
-/// `m×n` matrix of distances from each query to each reference.
+/// `m×n` matrix, queries × refs.
 pub fn cross<Q, R>(codec: Codec, queries: &[Q], refs: &[R], method: Method) -> Result<DistMatrix>
 where
     Q: AsRef<[u8]> + Sync,
@@ -303,8 +285,7 @@ where
         Method::Conditional => {
             let level = zstd_level(codec);
             let mut data = vec![0f32; m * n];
-            // Pass 1: queries as anchors, conditioning the more complex refs.
-            // Ties go to the query side so that every pair is computed once.
+            // Each pair is computed once, from the side with smaller C(x); ties go to queries.
             let by_query: Vec<Vec<(usize, usize)>> = (0..m)
                 .into_par_iter()
                 .map(|i| {
@@ -319,7 +300,6 @@ where
                     data[i * n + j] = ratio(c, lr[j]);
                 }
             }
-            // Pass 2: refs as anchors, conditioning the more complex queries.
             let by_ref: Vec<Vec<(usize, usize)>> = (0..n)
                 .into_par_iter()
                 .map(|j| {
@@ -339,22 +319,17 @@ where
     }
 }
 
-/// Number of pairs `(a, b)` whose concatenation exceeds `window` bytes.
-///
-/// With `same = true`, `a` and `b` are the same set and only unordered pairs
-/// of distinct elements are counted. Runs in `O(n log n)`.
+/// Pairs with `a + b > window`. With `same`, counts unordered distinct pairs. O(n log n).
 pub fn window_overflows(window: usize, a: &[usize], b: &[usize], same: bool) -> u64 {
     let mut sb = b.to_vec();
     sb.sort_unstable();
     let mut count: u64 = 0;
     for &x in a {
-        // number of y in b with x + y > window
         let threshold = window.saturating_sub(x);
         let idx = sb.partition_point(|&y| y <= threshold);
         count += (sb.len() - idx) as u64;
     }
     if same {
-        // remove self-pairs (x + x > window) and halve ordered pairs
         let selfs = a.iter().filter(|&&x| x.saturating_mul(2) > window).count() as u64;
         (count - selfs) / 2
     } else {
@@ -392,9 +367,7 @@ mod tests {
         for codec in Codec::all_defaults() {
             let same = ncd(codec, &a, &a).unwrap();
             let diff = ncd(codec, &a, &b).unwrap();
-            // BWT does not "see" a verbatim repeat as cheaply as LZ does:
-            // bzip2's self-distance on incompressible data is ≈0.2–0.25, a
-            // known deviation from the identity axiom of a metric.
+            // bzip2 NCD(x, x) is ~0.22 on random data.
             let tol = if matches!(codec, Codec::Bzip2 { .. }) {
                 0.3
             } else {
@@ -407,8 +380,7 @@ mod tests {
 
     #[test]
     fn deflate_window_pitfall() {
-        // 64 KiB of noise is beyond DEFLATE's 32 KiB window: even NCD(x, x)
-        // saturates, while zstd still recognizes the copy.
+        // 64 KiB exceeds DEFLATE's 32 KiB window.
         let a = noise(7, 64 << 10);
         assert!(ncd(Codec::Deflate { level: 9 }, &a, &a).unwrap() > 0.9);
         assert!(ncd(Codec::Zstd { level: 19 }, &a, &a).unwrap() < 0.05);
@@ -449,9 +421,7 @@ mod tests {
                 }
             }
         }
-        // shared 8 KB prefix ⇒ clearly similar
         assert!(p.get(0, 1) < 0.6, "{}", p.get(0, 1));
-        // conditioning a copy on itself costs almost nothing
         assert!(c.get(2, 2) < 0.05, "{}", c.get(2, 2));
     }
 
@@ -464,9 +434,7 @@ mod tests {
     #[test]
     fn overflow_counting() {
         let a = [10, 20, 30, 40];
-        // pairs with sum > 50: (20,40), (30,40) ⇒ 2
         assert_eq!(window_overflows(50, &a, &a, true), 2);
-        // ordered cross pairs a×[25]: 30+25, 40+25 ⇒ 2
         assert_eq!(window_overflows(50, &a, &[25], false), 2);
         let brute = a
             .iter()

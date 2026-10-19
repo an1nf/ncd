@@ -1,23 +1,6 @@
-//! Deterministic synthetic "malware family" corpus.
-//!
-//! Real malware cannot ship in a public repository, so tests and the demo use
-//! a generator that mimics the properties NCD exploits:
-//!
-//! * each family has its own code-like byte source (a sparse order-1 Markov
-//!   chain, like opcode sequences of a shared codebase) and a template drawn
-//!   from it;
-//! * samples are *variants* of the template: point mutations, inserted junk,
-//!   deleted, duplicated and reordered blocks (recompilation, polymorphism,
-//!   function reordering) and high-entropy padding (packed stubs);
-//! * every sample, benign or not, embeds the same "runtime library" blob,
-//!   like statically linked CRT code, so similarity is not trivially zero;
-//! * benign samples come from a few "vendors" (toolchains/frameworks): each
-//!   sample links a random subset of its vendor's shared modules plus code of
-//!   its own, so benign software is diverse but not unrelated — as with real
-//!   programs built on common frameworks.
-//!
-//! The corpus is a sanity check for the pipeline, not evidence about real
-//! malware — results on it are reported as such.
+//! Deterministic synthetic corpus. Families are mutated variants of a template
+//! drawn from a family-specific order-1 Markov source; benign samples share
+//! modules per vendor; all samples embed a common runtime blob.
 
 use crate::rng::SplitMix64;
 
@@ -26,10 +9,9 @@ pub struct SynthConfig {
     pub families: usize,
     pub per_family: usize,
     pub benign: usize,
-    /// Number of benign vendors whose library modules benign samples share.
     pub benign_vendors: usize,
     pub template_len: usize,
-    /// Fraction of bytes affected by mutations, e.g. 0.05.
+    /// Fraction of bytes mutated.
     pub mutation_rate: f64,
     pub seed: u64,
 }
@@ -55,14 +37,13 @@ pub struct Sample {
     pub bytes: Vec<u8>,
 }
 
-/// Sparse order-1 Markov source over bytes.
 struct Chain {
     succ: Vec<[u8; 4]>,
 }
 
 impl Chain {
     fn new(rng: &mut SplitMix64) -> Self {
-        // A restricted alphabet makes the source compressible like code.
+        // 64-symbol alphabet: code-like compressibility.
         let alphabet: Vec<u8> = rng.bytes(64);
         let succ = (0..256)
             .map(|_| std::array::from_fn(|_| alphabet[rng.below(alphabet.len())]))
@@ -97,13 +78,11 @@ impl Chain {
 
 fn mutate(rng: &mut SplitMix64, template: &[u8], rate: f64, chain: &Chain) -> Vec<u8> {
     let mut v = template.to_vec();
-    // point substitutions
     for b in v.iter_mut() {
         if rng.unit() < rate * 0.4 {
             *b = rng.byte();
         }
     }
-    // block-level edits
     let ops = ((template.len() as f64 * rate) / 256.0).ceil() as usize;
     for _ in 0..ops {
         if v.len() < 1024 {
@@ -111,7 +90,7 @@ fn mutate(rng: &mut SplitMix64, template: &[u8], rate: f64, chain: &Chain) -> Ve
         }
         match rng.below(4) {
             0 => {
-                // insert junk drawn from the family's own source (dead code)
+                // dead code
                 let at = rng.below(v.len());
                 let n = rng.range(16, 256);
                 let junk = chain.emit(rng, n);
@@ -130,7 +109,7 @@ fn mutate(rng: &mut SplitMix64, template: &[u8], rate: f64, chain: &Chain) -> Ve
                 v.splice(at..at, block);
             }
             _ => {
-                // swap two blocks (function reordering)
+                // function reordering
                 let len = rng.range(64, 512);
                 let a = rng.below(v.len() - 2 * len);
                 let b = rng.range(a + len, v.len() - len);
@@ -154,7 +133,7 @@ fn assemble(rng: &mut SplitMix64, body: Vec<u8>, runtime: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Generates the corpus. Labels are `family_00`, `family_01`, … and `benign`.
+/// Labels: `family_NN` and `benign`.
 pub fn generate(cfg: &SynthConfig) -> Vec<Sample> {
     let mut rng = SplitMix64::new(cfg.seed);
     let runtime = Chain::new(&mut rng).emit(&mut rng, 4096);
@@ -173,7 +152,6 @@ pub fn generate(cfg: &SynthConfig) -> Vec<Sample> {
             });
         }
     }
-    // Vendors: a code source plus a pool of shared library modules.
     let vendors: Vec<(Chain, Vec<Vec<u8>>, SplitMix64)> = (0..cfg.benign_vendors.max(1))
         .map(|_| {
             let mut vrng = rng.fork();

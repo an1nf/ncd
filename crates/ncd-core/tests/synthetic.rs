@@ -1,6 +1,3 @@
-//! End-to-end check: NCD + 1-NN separates synthetic families, and the
-//! anomaly score ranks malware above held-out benign samples.
-
 use ncd_core::metrics::{report, roc_auc};
 use ncd_core::synth::{SynthConfig, generate};
 use ncd_core::{Codec, Method, knn, ncd};
@@ -63,8 +60,7 @@ fn loo_knn_classifies_families() {
 fn anomaly_score_separates_malware_from_benign() {
     let (objs, labels, names) = corpus();
     let benign = names.iter().position(|n| n == "benign").unwrap() as u32;
-    // references: first half of the benign set (covers every vendor);
-    // queries: held-out benign + all malware
+    // first half of benign covers every vendor
     let ben_idx: Vec<usize> = (0..objs.len()).filter(|&i| labels[i] == benign).collect();
     let (refs, held) = ben_idx.split_at(ben_idx.len() / 2);
     let queries: Vec<usize> = (0..objs.len()).filter(|i| !refs.contains(i)).collect();

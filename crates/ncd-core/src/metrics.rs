@@ -1,5 +1,3 @@
-//! Classification and ranking metrics.
-
 #[derive(Clone, Debug)]
 pub struct ClassMetrics {
     pub label: String,
@@ -19,8 +17,7 @@ pub struct Report {
     pub confusion: Vec<Vec<u64>>,
 }
 
-/// Builds a report for labels `0..names.len()`. Predictions outside that
-/// range (e.g. "no neighbour") count as errors.
+/// Predictions outside `0..names.len()` count as errors.
 pub fn report(y_true: &[u32], y_pred: &[u32], names: &[String]) -> Report {
     assert_eq!(y_true.len(), y_pred.len());
     let k = names.len();
@@ -76,8 +73,7 @@ pub fn report(y_true: &[u32], y_pred: &[u32], names: &[String]) -> Report {
     }
 }
 
-/// Area under the ROC curve via the Mann–Whitney U statistic, with average
-/// ranks for ties. Returns `None` if either class is empty or a score is NaN.
+/// Mann-Whitney U with tied ranks. `None` if a class is empty or a score is NaN.
 pub fn roc_auc(scores: &[f32], positive: &[bool]) -> Option<f64> {
     assert_eq!(scores.len(), positive.len());
     if scores.iter().any(|s| s.is_nan()) {

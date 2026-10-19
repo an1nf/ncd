@@ -1,14 +1,4 @@
-//! `ncdthreat` — Python bindings for `ncd-core`.
-//!
-//! Byte objects are borrowed zero-copy from Python (`PyBackedBytes`) and the
-//! GIL is released for every heavy computation, so the Rust thread pool runs
-//! in parallel while Python threads keep working.
-//!
-//! ```python
-//! import ncdthreat as nt
-//! D = nt.pairwise([a, b, c], codec="zstd:19", method="conditional")  # (3, 3) float32
-//! S = nt.anomaly_scores(queries, benign_refs, k=5)                    # (m,) float32
-//! ```
+//! Python bindings. Bytes are borrowed zero-copy; the GIL is released while computing.
 
 use std::path::PathBuf;
 
@@ -41,7 +31,7 @@ fn to_array(py: Python<'_>, m: DistMatrix) -> PyResult<Bound<'_, PyArray2<f32>>>
     Ok(arr.into_pyarray(py))
 }
 
-/// C(x): compressed length of `data` in bytes.
+/// C(x) in bytes.
 #[pyfunction]
 #[pyo3(signature = (data, codec = "zstd:19"))]
 fn compressed_len(py: Python<'_>, data: PyBackedBytes, codec: &str) -> PyResult<usize> {
@@ -50,7 +40,6 @@ fn compressed_len(py: Python<'_>, data: PyBackedBytes, codec: &str) -> PyResult<
         .map_err(|e| PyIOError::new_err(e.to_string()))
 }
 
-/// NCD between two byte strings.
 #[pyfunction(name = "ncd")]
 #[pyo3(signature = (x, y, codec = "zstd:19", method = "concat"))]
 fn ncd_py(
@@ -65,7 +54,7 @@ fn ncd_py(
         .map_err(to_py)
 }
 
-/// Symmetric (n, n) float32 NCD matrix with zero diagonal.
+/// (n, n) float32, zero diagonal.
 #[pyfunction]
 #[pyo3(signature = (objs, codec = "zstd:19", method = "concat"))]
 fn pairwise<'py>(
@@ -81,7 +70,7 @@ fn pairwise<'py>(
     to_array(py, m)
 }
 
-/// (m, n) float32 matrix of NCD(query_i, ref_j).
+/// (m, n) float32, queries x refs.
 #[pyfunction]
 #[pyo3(signature = (queries, refs, codec = "zstd:19", method = "concat"))]
 fn cross<'py>(
@@ -98,7 +87,7 @@ fn cross<'py>(
     to_array(py, m)
 }
 
-/// Mean NCD from each query to its k nearest references, shape (m,).
+/// (m,) mean NCD to the k nearest refs.
 #[pyfunction]
 #[pyo3(signature = (queries, refs, k = 5, codec = "zstd:19", method = "concat"))]
 fn anomaly_scores<'py>(
@@ -116,8 +105,7 @@ fn anomaly_scores<'py>(
     Ok(PyArray1::from_vec(py, s))
 }
 
-/// Reads a sample and returns the requested view (`code`, `no-overlay`,
-/// `whole`) as bytes. Unparseable files fall back to the whole content.
+/// View `code`, `no-overlay` or `whole`; falls back to the whole file.
 #[pyfunction]
 #[pyo3(signature = (path, view = "code", max_bytes = None))]
 fn load<'py>(
@@ -133,7 +121,7 @@ fn load<'py>(
     Ok(PyBytes::new(py, &ex.bytes))
 }
 
-/// Window (bytes) over which `codec` can exploit redundancy.
+/// Codec window in bytes.
 #[pyfunction]
 #[pyo3(signature = (codec = "zstd:19"))]
 fn window(codec: &str) -> PyResult<usize> {

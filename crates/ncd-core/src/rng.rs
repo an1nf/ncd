@@ -1,5 +1,4 @@
-//! Small deterministic PRNG (SplitMix64) so synthetic data is reproducible
-//! across platforms and dependency upgrades.
+//! SplitMix64, for reproducible synthetic data.
 
 #[derive(Clone, Debug)]
 pub struct SplitMix64(u64);
@@ -17,18 +16,16 @@ impl SplitMix64 {
         z ^ (z >> 31)
     }
 
-    /// Uniform in `0..n` (Lemire's multiply-shift; negligible bias for n ≪ 2^64).
+    /// `0..n`, multiply-shift.
     pub fn below(&mut self, n: usize) -> usize {
         debug_assert!(n > 0);
         ((self.next_u64() as u128 * n as u128) >> 64) as usize
     }
 
-    /// Uniform in `lo..=hi`.
     pub fn range(&mut self, lo: usize, hi: usize) -> usize {
         lo + self.below(hi - lo + 1)
     }
 
-    /// Uniform in `[0, 1)`.
     pub fn unit(&mut self) -> f64 {
         (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64
     }

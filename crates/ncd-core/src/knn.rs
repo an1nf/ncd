@@ -1,11 +1,10 @@
-//! k-nearest-neighbour classification and anomaly scoring on distance rows.
+//! k-NN classification and anomaly scores.
 
 use rayon::prelude::*;
 
 use crate::ncd::DistMatrix;
 
-/// Indices of the `k` smallest entries of `row`, skipping `exclude`,
-/// sorted by distance (NaN sorts last).
+/// `k` smallest indices, sorted, NaN last.
 pub fn nearest(row: &[f32], k: usize, exclude: Option<usize>) -> Vec<usize> {
     let mut idx: Vec<usize> = (0..row.len()).filter(|&j| Some(j) != exclude).collect();
     let k = k.min(idx.len());
@@ -21,11 +20,10 @@ pub fn nearest(row: &[f32], k: usize, exclude: Option<usize>) -> Vec<usize> {
     idx
 }
 
-/// Majority vote among the `k` nearest neighbours. Ties are broken in
-/// favour of the tied class whose closest member is nearest.
+/// Majority vote; ties go to the class with the nearest member.
 pub fn vote(row: &[f32], labels: &[u32], k: usize, exclude: Option<usize>) -> Option<u32> {
     let nn = nearest(row, k, exclude);
-    // (label, count, rank of first occurrence); nn is sorted by distance
+    // (label, count, first rank)
     let mut tally: Vec<(u32, usize, usize)> = Vec::new();
     for (rank, &j) in nn.iter().enumerate() {
         let l = labels[j];
@@ -40,7 +38,6 @@ pub fn vote(row: &[f32], labels: &[u32], k: usize, exclude: Option<usize>) -> Op
         .map(|t| t.0)
 }
 
-/// Leave-one-out k-NN predictions over a square pairwise matrix.
 pub fn loo_predict(m: &DistMatrix, labels: &[u32], k: usize) -> Vec<u32> {
     assert_eq!(m.rows(), m.cols(), "pairwise matrix must be square");
     assert_eq!(m.rows(), labels.len());
@@ -50,7 +47,6 @@ pub fn loo_predict(m: &DistMatrix, labels: &[u32], k: usize) -> Vec<u32> {
         .collect()
 }
 
-/// k-NN predictions for each row of a query×train cross matrix.
 pub fn predict(cross: &DistMatrix, train_labels: &[u32], k: usize) -> Vec<u32> {
     assert_eq!(cross.cols(), train_labels.len());
     (0..cross.rows())
@@ -59,8 +55,7 @@ pub fn predict(cross: &DistMatrix, train_labels: &[u32], k: usize) -> Vec<u32> {
         .collect()
 }
 
-/// Anomaly score of each query: mean distance to its `k` nearest references
-/// (typically benign-only references). Higher means more anomalous.
+/// Mean distance to the `k` nearest references.
 pub fn anomaly_scores(cross: &DistMatrix, k: usize) -> Vec<f32> {
     (0..cross.rows())
         .into_par_iter()
@@ -89,7 +84,6 @@ mod tests {
 
     #[test]
     fn tie_break_by_nearest() {
-        // k = 2: one neighbour of each class; class 7 is closer.
         let row = [0.2, 0.1, 0.9];
         let labels = [3, 7, 3];
         assert_eq!(vote(&row, &labels, 2, None), Some(7));
@@ -98,7 +92,6 @@ mod tests {
 
     #[test]
     fn loo_on_blocks() {
-        // two well separated clusters
         let n = 6;
         let mut d = vec![0f32; n * n];
         for i in 0..n {

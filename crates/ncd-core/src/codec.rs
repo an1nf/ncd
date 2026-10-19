@@ -1,7 +1,4 @@
-//! Compressors used as computable approximations of Kolmogorov complexity.
-//!
-//! Only the *length* of the compressed output matters for NCD, so the
-//! stream-based codecs write into a counting sink instead of allocating.
+//! Compressors. Only output length is used, so stream codecs write to a counting sink.
 
 use std::fmt;
 use std::io::{self, Write};
@@ -9,24 +6,18 @@ use std::str::FromStr;
 
 use crate::Error;
 
-/// zstd window log used for every zstd context: 2^27 = 128 MiB.
-///
-/// The default window at level 19 is 8 MiB; raising it lets `C(xy)` exploit
-/// redundancy between `x` and `y` even for multi-megabyte binaries. zstd
-/// shrinks the window automatically for small inputs, so this costs nothing
-/// on small objects.
+/// 128 MiB window (level 19 default is 8 MiB); zstd shrinks it for small inputs.
 pub const ZSTD_WINDOW_LOG: u32 = 27;
 
-/// A real-world compressor `C`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Codec {
-    /// Zstandard, levels 1..=22 (LZ77 + finite-state entropy).
+    /// Levels 1..=22.
     Zstd { level: i32 },
-    /// LZMA2 in an `.xz` container without integrity check, presets 0..=9.
+    /// LZMA2, presets 0..=9, no integrity check.
     Xz { level: u32 },
-    /// bzip2, levels 1..=9 (Burrows–Wheeler transform, 100k·level blocks).
+    /// Levels 1..=9, blocks of 100 kB × level.
     Bzip2 { level: u32 },
-    /// Raw DEFLATE (the algorithm behind gzip/zlib), levels 0..=9.
+    /// Raw DEFLATE, levels 0..=9.
     Deflate { level: u32 },
 }
 
@@ -37,7 +28,6 @@ impl Default for Codec {
 }
 
 impl Codec {
-    /// All codecs at their default level, for benchmarking.
     pub fn all_defaults() -> [Codec; 4] {
         [
             Codec::Zstd { level: 19 },
@@ -56,11 +46,7 @@ impl Codec {
         }
     }
 
-    /// Largest span (in bytes) over which the codec can exploit redundancy.
-    ///
-    /// When `|x| + |y|` exceeds this, `C(xy) ≈ C(x) + C(y)` regardless of how
-    /// similar the objects are and NCD saturates near 1 (Cebrián, Alfonseca &
-    /// Ortega, 2005). DEFLATE's 32 KiB window is the classic pitfall.
+    /// Max match distance in bytes. Beyond it `C(xy) ≈ C(x) + C(y)` and NCD saturates.
     pub fn window(&self) -> usize {
         match *self {
             Codec::Zstd { .. } => 1 << ZSTD_WINDOW_LOG,
@@ -74,23 +60,19 @@ impl Codec {
                 8 => 32 << 20,
                 _ => 64 << 20,
             },
-            // BWT works on independent blocks of level × 100 000 bytes.
             Codec::Bzip2 { level } => level as usize * 100_000,
             Codec::Deflate { .. } => 32 << 10,
         }
     }
 
-    /// Whether [`crate::Method::Conditional`] is available.
     pub fn supports_conditional(&self) -> bool {
         matches!(self, Codec::Zstd { .. })
     }
 
-    /// Creates a reusable per-thread compression context.
     pub fn worker(&self) -> io::Result<Worker> {
         Worker::new(*self)
     }
 
-    /// Convenience one-shot `C(x)`.
     pub fn compressed_len(&self, data: &[u8]) -> io::Result<usize> {
         self.worker()?.compressed_len(data)
     }
@@ -124,7 +106,7 @@ impl fmt::Display for Codec {
 impl FromStr for Codec {
     type Err = Error;
 
-    /// Parses `name[:level]`, e.g. `zstd`, `zstd:19`, `xz:6`, `gzip:9`.
+    /// `name[:level]`, e.g. `zstd:19`, `xz`, `gzip:9`.
     fn from_str(s: &str) -> Result<Self, Error> {
         let bad = || Error::ParseCodec(s.to_string());
         let (name, level) = match s.split_once(':') {
@@ -147,7 +129,6 @@ impl FromStr for Codec {
     }
 }
 
-/// `io::Write` sink that only counts bytes.
 #[derive(Default)]
 struct Counter(u64);
 
@@ -161,7 +142,6 @@ impl Write for Counter {
     }
 }
 
-/// Builds a zstd compression context with the crate-wide parameters.
 pub(crate) fn zstd_compressor<'a>(
     level: i32,
     dict: Option<&'a zstd::dict::EncoderDictionary<'a>>,
@@ -171,14 +151,14 @@ pub(crate) fn zstd_compressor<'a>(
         None => zstd::bulk::Compressor::new(level)?,
     };
     c.set_parameter(zstd::zstd_safe::CParameter::WindowLog(ZSTD_WINDOW_LOG))?;
-    // Frame metadata is constant noise for NCD; drop what we can.
+    // Constant frame overhead adds noise to NCD.
     c.set_parameter(zstd::zstd_safe::CParameter::ChecksumFlag(false))?;
     c.set_parameter(zstd::zstd_safe::CParameter::ContentSizeFlag(false))?;
     c.set_parameter(zstd::zstd_safe::CParameter::DictIdFlag(false))?;
     Ok(c)
 }
 
-/// Reusable compression context (one per thread).
+/// Per-thread compression context.
 pub struct Worker {
     codec: Codec,
     zstd: Option<zstd::bulk::Compressor<'static>>,
@@ -204,12 +184,12 @@ impl Worker {
         self.codec
     }
 
-    /// `C(data)`: compressed length in bytes.
+    /// `C(x)`
     pub fn compressed_len(&mut self, data: &[u8]) -> io::Result<usize> {
         compress_len(self.codec, self.zstd.as_mut(), &mut self.out, data)
     }
 
-    /// `C(xy)`: compressed length of the concatenation `x ‖ y`.
+    /// `C(xy)`
     pub fn concat_len(&mut self, x: &[u8], y: &[u8]) -> io::Result<usize> {
         self.concat.clear();
         self.concat.reserve(x.len() + y.len());
@@ -241,9 +221,7 @@ fn compress_len(
             zstd_len(c, out, data)
         }
         Codec::Xz { level } => {
-            // A dictionary larger than the input is useless, and presets 7–9
-            // would otherwise allocate (and zero) 16–64 MiB on every call.
-            // Shrinking it to the input size leaves the output unchanged.
+            // Cap dict size to the input: same output, avoids 16-64 MiB allocs per call.
             let mut opts = xz2::stream::LzmaOptions::new_preset(level).map_err(io::Error::other)?;
             let need = data.len().max(4096).next_power_of_two().min(codec.window());
             opts.dict_size(need as u32);

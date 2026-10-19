@@ -1,9 +1,5 @@
-//! Defensive byte-view extraction from untrusted executables.
-//!
-//! Malware samples are adversarial input: headers lie, offsets point past the
-//! end of the file, sizes overflow. Everything here is bounds-checked, the
-//! parser runs under `catch_unwind`, and any failure falls back to the raw
-//! bytes. Nothing is ever mapped as executable or run.
+//! Byte views of untrusted PE/ELF files. Bounds-checked, parser under
+//! `catch_unwind`, falls back to raw bytes. Nothing is executed.
 
 use std::fs::File;
 use std::io::Read;
@@ -16,21 +12,15 @@ use goblin::pe::section_table::{IMAGE_SCN_CNT_CODE, IMAGE_SCN_MEM_EXECUTE};
 
 use crate::{Error, Result};
 
-/// Refuse to read files larger than this (256 MiB) into memory.
 pub const MAX_FILE_SIZE: u64 = 256 << 20;
 
-/// Which bytes of a sample are compared.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum View {
-    /// The file as-is.
     Whole,
-    /// Concatenated executable sections (PE: `CNT_CODE`/`MEM_EXECUTE`;
-    /// ELF: `SHF_EXECINSTR` sections, else `PF_X` segments). Discards
-    /// resources, overlays and padding that dominate raw-byte similarity.
+    /// Executable sections: PE `CNT_CODE`/`MEM_EXECUTE`, ELF `SHF_EXECINSTR`, else `PF_X` segments.
     #[default]
     Code,
-    /// Headers plus all sections, without the trailing overlay (installers
-    /// and droppers often append unrelated payloads there).
+    /// Headers and sections, overlay removed.
     NoOverlay,
 }
 
@@ -67,12 +57,11 @@ pub enum Format {
 pub struct Extracted {
     pub bytes: Vec<u8>,
     pub format: Format,
-    /// True when the requested view was unavailable (unparseable file, no
-    /// executable section, …) and the whole file was used instead.
+    /// View unavailable; whole file used.
     pub fell_back: bool,
 }
 
-/// Bounds-checked `data[off .. off+len]`, truncated at end of file.
+/// `data[off..off + len]`, clamped to EOF.
 fn slice_at(data: &[u8], off: u64, len: u64) -> Option<&[u8]> {
     let start = usize::try_from(off).ok()?;
     if start >= data.len() {
@@ -83,7 +72,6 @@ fn slice_at(data: &[u8], off: u64, len: u64) -> Option<&[u8]> {
     (end > start).then(|| &data[start..end])
 }
 
-/// Returns (format, byte ranges) for the view, or None to fall back.
 fn ranges(data: &[u8], view: View) -> (Format, Option<Vec<(u64, u64)>>) {
     match goblin::Object::parse(data) {
         Ok(goblin::Object::PE(pe)) => {
@@ -119,8 +107,7 @@ fn ranges(data: &[u8], view: View) -> (Format, Option<Vec<(u64, u64)>>) {
                         .map(|s| (s.sh_offset, s.sh_size))
                         .collect();
                     if secs.is_empty() {
-                        // Section headers are optional (and often stripped by
-                        // malware); fall back to executable load segments.
+                        // No section headers: use executable segments.
                         Some(
                             elf.program_headers
                                 .iter()
@@ -151,7 +138,7 @@ fn ranges(data: &[u8], view: View) -> (Format, Option<Vec<(u64, u64)>>) {
     }
 }
 
-/// Extracts `view` from `data`. Never panics; falls back to the whole input.
+/// Never panics.
 pub fn extract(data: &[u8], view: View) -> Extracted {
     let parsed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ranges(data, view)));
     let (format, ranges) = parsed.unwrap_or((Format::Unknown, None));
@@ -183,8 +170,6 @@ pub fn extract(data: &[u8], view: View) -> Extracted {
     }
 }
 
-/// Reads a file (refusing anything above [`MAX_FILE_SIZE`]), extracts the
-/// view and optionally truncates it to `max_bytes`.
 pub fn load(path: &Path, view: View, max_bytes: Option<usize>) -> Result<Extracted> {
     let f = File::open(path)?;
     let size = f.metadata()?.len();
@@ -208,8 +193,7 @@ pub fn load(path: &Path, view: View, max_bytes: Option<usize>) -> Result<Extract
 mod tests {
     use super::*;
 
-    /// Minimal PE32 with two sections: `.text` (code) and `.data`, plus an
-    /// overlay. Offsets are hand-computed; fields goblin ignores are zero.
+    /// PE32 with `.text`, `.data` and an overlay.
     pub(crate) fn tiny_pe() -> Vec<u8> {
         let mut f = vec![0u8; 0x400];
         f[0..2].copy_from_slice(b"MZ");
