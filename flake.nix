@@ -54,7 +54,7 @@
             pkgs.maturin pythonEnv
           ];
           shellHook = ''
-            echo "ncd-threat dev shell — cargo build --release; maturin develop --release -m crates/ncd-py/Cargo.toml"
+            echo "ncd-threat: cargo build --release; maturin develop --release -m crates/ncd-py/Cargo.toml"
           '';
         };
       });

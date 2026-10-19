@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 340" width="900" height="340" font-family="Helvetica, Arial, sans-serif">
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#111111"/></marker></defs>
+<rect width="900" height="340" fill="#ffffff"/>
+<path d="M200,72.0 H240.0 V72.0 H280" fill="none" stroke="#111111" stroke-width="1" marker-end="url(#a)"/>
+<path d="M200,128.0 H240.0 V128.0 H280" fill="none" stroke="#111111" stroke-width="1" marker-end="url(#a)"/>
+<path d="M600,100.0 H640.0 V100.0 H680" fill="none" stroke="#111111" stroke-width="1" marker-end="url(#a)"/>
+<path d="M354.88,170 V190.0 H355.0 V210" fill="none" stroke="#111111" stroke-width="1" marker-end="url(#a)"/>
+<path d="M525.12,170 V190.0 H525.0 V210" fill="none" stroke="#111111" stroke-width="1" marker-end="url(#a)"/>
+<path d="M525.0,254 V265.0 H525.0 V276" fill="none" stroke="#111111" stroke-width="1" marker-end="url(#a)"/>
+<rect x="40" y="50" width="160" height="44" rx="6" fill="#ffffff" stroke="#111111" stroke-width="1"/>
+<text x="120.0" y="76.55" text-anchor="middle" font-size="13" font-weight="bold" fill="#111111">Binaries</text>
+<rect x="40" y="106" width="160" height="44" rx="6" fill="#ffffff" stroke="#111111" stroke-width="1"/>
+<text x="120.0" y="132.55" text-anchor="middle" font-size="13" font-weight="bold" fill="#111111">Flow windows</text>
+<rect x="280" y="30" width="320" height="140" rx="6" fill="#ffffff" stroke="#111111" stroke-width="2"/>
+<text x="440.0" y="96.25" text-anchor="middle" font-size="15" font-weight="bold" fill="#111111">ncd-core (Rust)</text>
+<text x="440.0" y="115.25" text-anchor="middle" font-size="12" fill="#666666">extract · codec · ncd</text>
+<rect x="680" y="72" width="180" height="56" rx="6" fill="#ffffff" stroke="#111111" stroke-width="1"/>
+<text x="770.0" y="95.55" text-anchor="middle" font-size="13" font-weight="bold" fill="#111111">Outputs</text>
+<text x="770.0" y="114.55" text-anchor="middle" font-size="12" fill="#666666">distances · scores · metrics</text>
+<rect x="280" y="210" width="150" height="44" rx="6" fill="#ffffff" stroke="#111111" stroke-width="1"/>
+<text x="355.0" y="236.55" text-anchor="middle" font-size="13" font-weight="bold" fill="#111111">ncd (CLI)</text>
+<rect x="450" y="210" width="150" height="44" rx="6" fill="#ffffff" stroke="#111111" stroke-width="1"/>
+<text x="525.0" y="236.55" text-anchor="middle" font-size="13" font-weight="bold" fill="#111111">ncdthreat (PyO3)</text>
+<rect x="450" y="276" width="150" height="44" rx="6" fill="#ffffff" stroke="#111111" stroke-width="1"/>
+<text x="525.0" y="302.55" text-anchor="middle" font-size="13" font-weight="bold" fill="#111111">python/</text>
+</svg>
