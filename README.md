@@ -121,13 +121,6 @@ python python/compare.py results/
 
 The anomaly detector is fitted on benign training windows only. CIC-IDS2017 has known feature and labeling errors (Engelen et al., 2021; Rosay et al., 2022), so LYCOS-IDS2017 is preferable. `--drop-port` removes the destination port.
 
-## Limitations
-
-- Pairwise cost is quadratic. Per-family medoids or an LSH prefilter would reduce it.
-- Packed samples compress poorly.
-- Appending benign code moves a sample toward benign neighbors; this evasion has not been measured yet.
-- `extract` is tested with mutation sweeps but not yet fuzzed.
-
 ## References
 
 - M. Li, X. Chen, X. Li, B. Ma, P. Vitányi. The similarity metric. IEEE Trans. Inf. Theory 50(12), 2004.
