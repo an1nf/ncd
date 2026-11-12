@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Synthetic demo: benchmark, leave-one-out k-NN, figures in docs/img.
+# Synthetic corpus: codec benchmark, leave-one-out 1-NN, NCD matrix figures.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 OUT=${OUT:-demo-out}
 NCD=target/release/ncd
-mkdir -p "$OUT" docs/img
+mkdir -p "$OUT"
 
 cargo build --release -p ncd-cli
 rm -rf "$OUT/synth"
@@ -21,5 +21,5 @@ echo "== leave-one-out 1-NN =="
 
 echo "== matrix + figures =="
 "$NCD" matrix "$OUT/synth" -o "$OUT/synth_ncd.npy" -c zstd:19 -m conditional
-python3 python/plot_matrix.py "$OUT/synth_ncd.npy" --title "Synthetic corpus" --out-prefix docs/img/synthetic
-echo "done: $OUT/, docs/img/"
+PYTHONPATH=python python3 -m ncdeval.plot "$OUT/synth_ncd.npy" --title "Synthetic corpus" --out-prefix "$OUT/synthetic"
+echo "outputs in $OUT/"

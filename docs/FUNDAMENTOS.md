@@ -1,6 +1,6 @@
 # Fundamentos
 
-Este documento describe la teoría en la que se basa el proyecto, los supuestos de los que depende y dónde fallan esos supuestos en la práctica.
+Teoría del proyecto, sus supuestos y dónde fallan en la práctica.
 
 ## 1. Complejidad de Kolmogorov
 
@@ -89,6 +89,8 @@ $$\mathrm{NCD}_{\mathrm{cond}}(x, y) = \frac{C(y \mid x)}{C(y)}, \quad C(x) \le 
 
 El diccionario se prepara una vez por objeto y se reutiliza en toda su fila, lo que evita volver a comprimir $x$ y dio una aceleración de 3.4x con zstd nivel 19. Un diccionario crudo transfiere coincidencias LZ pero no estadísticas del codificador de entropía, lo que es una explicación plausible de por qué ordena peor a los vecinos que `concat` en ventanas de flujos medianas y repetitivas.
 
+**Modelo de lenguaje.** Con codificación aritmética, $C(x) = -\log_2 p(x)$ salvo dos bits, y $C(xy) = C(x) + C(y \mid x)$ exactamente. La tasa de compresión de un documento aislado no predice la exactitud de la NCD; lo que la predice es la separación entre clases de $C(y \mid x)$. Un modelo que no usa su contexto da $C(xy) \approx C(x) + C(y)$, como una ventana desbordada; un modelo de coincidencias (PAQ) mezclado con la red lo corrige.
+
 ## 6. Clasificación con una distancia
 
 La NCD produce distancias, no vectores de características, así que los clasificadores deben trabajar solo con distancias.
@@ -107,7 +109,7 @@ Decisiones que se derivan de esto:
 
 - **Solo secciones de código por defecto.** Recursos, iconos, relleno y overlays son grandes y a menudo se comparten con software no relacionado, y pueden ocultar la señal del código. La vista `code` conserva las secciones ejecutables; `no-overlay` elimina los datos añadidos tras la última sección.
 - **Ventana suficiente para binarios completos.** zstd se configura con una ventana de 128 MiB para que muestras de varios megabytes sigan viéndose entre sí dentro de $xy$.
-- **Puntos ciegos conocidos.** El empaquetado y el cifrado vuelven los bytes casi aleatorios, así que la NCD refleja el empaquetador y no la carga útil. Añadir código benigno a una muestra la acerca a vecinos benignos, una evasión que aún no se ha medido. Trabajo previo relacionado: Wehner (2007) usó la NCD para analizar gusanos y tráfico, Bailey et al. (2007) para agrupar comportamiento de malware, y Raff y Nicholas (2017) propusieron LZJD como alternativa más rápida para secuencias largas.
+- **Puntos ciegos conocidos.** El empaquetado y el cifrado vuelven los bytes casi aleatorios, así que la NCD refleja el empaquetador y no la carga útil. Añadir código de otra familia acerca la muestra a esa familia; el relleno benigno genérico no la mueve. Trabajo previo relacionado: Wehner (2007) usó la NCD para analizar gusanos y tráfico, Bailey et al. (2007) para agrupar comportamiento de malware, y Raff y Nicholas (2017) propusieron LZJD como alternativa más rápida para secuencias largas.
 
 ## 8. Aplicación a tráfico de red
 

@@ -12,8 +12,6 @@
         pkgs = nixpkgs.legacyPackages.${system};
         manifest = (pkgs.lib.importTOML ./Cargo.toml).workspace.package;
 
-        # Python with the evaluation stack; the Rust bindings are added with
-        # `maturin develop` inside the dev shell.
         pythonEnv = pkgs.python3.withPackages (ps: with ps; [
           numpy pandas scikit-learn matplotlib
         ]);
@@ -28,7 +26,6 @@
               !(builtins.elem base [ "target" "demo-out" "results" ".direnv" ]);
           };
           cargoLock.lockFile = ./Cargo.lock;
-          # the PyO3 crate is built by maturin, not here
           cargoBuildFlags = [ "-p" "ncd-cli" ];
           cargoTestFlags = [ "-p" "ncd-core" "-p" "ncd-cli" ];
           meta = {
@@ -44,7 +41,6 @@
 
         apps.default = flake-utils.lib.mkApp { drv = ncd; };
 
-        # `nix flake check` builds the CLI and runs the Rust test-suite.
         checks.default = ncd;
 
         devShells.default = pkgs.mkShell {
@@ -54,7 +50,7 @@
             pkgs.maturin pythonEnv
           ];
           shellHook = ''
-            echo "ncd-threat: cargo build --release; maturin develop --release -m crates/ncd-py/Cargo.toml"
+            export PYTHONPATH=$PWD/python
           '';
         };
       });
