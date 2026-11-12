@@ -16,7 +16,8 @@ from style import plt
 
 def describe(doc: dict) -> tuple[str, str]:
     if "codec" in doc:  # from ncd eval
-        return "malware-family", f"ncd-{doc['codec'].replace(':', '')}-{doc['method']}-knn{doc['k']}"
+        view = f"-{doc['view']}" if doc.get("view") else ""
+        return "malware-family", f"ncd-{doc['codec'].replace(':', '')}-{doc['method']}{view}-knn{doc['k']}"
     return doc.get("task", "?"), doc.get("model", "?")
 
 

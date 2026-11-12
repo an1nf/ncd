@@ -26,9 +26,20 @@ Theory and design principles (Spanish): [docs/FUNDAMENTOS.md](docs/FUNDAMENTOS.m
 - `ncd`: command line interface with `dist`, `matrix`, `eval`, `score`, `bench` and `synth`.
 - `ncdthreat`: Python bindings via PyO3. Bytes are borrowed without copying and the GIL is released during compression.
 - `python/`: sample fetchers (MalwareBazaar, PyPI), EMBER v3 features, random, temporal or per-file splits, EMBER and flow baselines (GBDT, k-NN, Isolation Forest), CICFlowMeter windowing, NCD evaluation and plots.
+- `python/lmcodec`: arithmetic coder, transformer with key/value cache, GPT-2 tokenizer, Hugging Face adapter (`lm:hf:ORG/MODEL`), match model and NCD estimators for language-model codecs (needs `python/requirements-lm.txt`).
+- `scripts/`: setup, text-data download, and end-to-end runs for the text experiment, PE families (MalwareBazaar or a PyPI dry run, with an evasion test) and CIC-IDS2017 (including a language model trained on benign traffic).
 - `flake.nix` and CI: build, tests, clippy, an end-to-end smoke test and `nix flake check`.
 
 ## Usage
+
+Step-by-step runbook (Spanish) for setup, data downloads, training and every experiment: [docs/PASOS.md](docs/PASOS.md). The scripts in `scripts/` resume where they stopped:
+
+```bash
+./scripts/setup.sh                                   # build, venv, bindings, tests
+./scripts/download_text_data.sh && ./scripts/text_experiment.sh
+SOURCE=pypi ./scripts/malware_families.sh            # or SOURCE=bazaar with ABUSECH_AUTH_KEY, in a VM
+CSV_DIR=~/ncd-data/cic/TrafficLabelling ./scripts/cic_ids2017.sh
+```
 
 ```bash
 nix develop            # or rustup plus python/requirements.txt
@@ -137,17 +148,72 @@ One test sample is 2.5 points of accuracy, so the NCD settings are within noise 
 
 <p align="center"><img src="docs/img/pypi_heatmap.png" width="60%" alt="NCD matrix of 125 PyPI PE files grouped by project"></p>
 
+### MalwareBazaar
+
+Eight signatures (AgentTesla, Formbook, RemcosRAT, AsyncRAT, SnakeKeylogger, RedLineStealer, LummaStealer, QuasarRAT). For each, 40 exe/dll samples up to 16 MB were taken evenly in time from the latest 1000 per signature, downloaded in November 2026, giving 320 samples. 15 of them start with `MZ` but have headers the PE parser rejects, so their code view is the whole file. Every test set has 96 samples (12 per family), so one sample is about 1 point of accuracy and a 95% interval is about ±10 points.
+
+MalwareBazaar returns the most recent samples per signature, so each family covers a different time window: Formbook's 40 span two months, RedLine's almost two years. A single global time cut left Formbook with 3 training and 37 test samples, which measures that imbalance rather than drift. `make_split.py --protocol temporal-family` trains on each family's 28 oldest samples and tests on its 12 newest.
+
+| model | input | random split | temporal, per family |
+|---|---|---:|---:|
+| GBDT | EMBER v3 | **0.635** | 0.500 |
+| 1-NN NCD, zstd:9 conditional | whole file | 0.552 | **0.510** |
+| 1-NN NCD, zstd:9 conditional | code sections | 0.469 | **0.510** |
+| 1-NN Euclidean | EMBER v3 | 0.521 | 0.479 |
+| 1-NN NCD, zstd:3 concat | code sections | 0.469 | 0.458 |
+
+Paired on the same test samples:
+
+- **Random split.** GBDT beats NCD on code sections by 0.167 (95% CI 0.07 to 0.26, permutation p = 0.002) and NCD on the whole file by 0.083 (CI −0.01 to 0.17, p = 0.12).
+- **Per-family temporal split.** NCD and GBDT are level: +0.010, CI −0.07 to +0.09. GBDT loses 13.5 points from the random to the temporal split; NCD loses 4 on the whole file and gains 4 on code sections.
+
+So NCD holds up better on newer samples, but it is not better than GBDT. Both methods send most AgentTesla test samples to Formbook, 10 of 12 with NCD and 7 of 12 with GBDT; a shared .NET crypter is a likely cause but has not been checked.
+
+Evasion, random split, zstd:9 conditional on code sections. A fraction f of each test sample's size was appended. Benign code from the PyPI DLLs leaves accuracy flat (0.46 at f = 0, 0.48 at f = 2): it is equally unlike every reference. Code from QuasarRAT samples, a family in the reference set, lowers it from 0.46 to 0.33 at f = 1. Mimicking another family works; generic padding does not.
+
+## Language models as compressors
+
+`python/lmcodec` turns a language model into an NCD compressor with arithmetic coding, and `python/ncd_backend.py` accepts `--codec lm:model.pt` wherever the scripts take a codec. Write-up (Spanish): [docs/COMPRESION_LM.md](docs/COMPRESION_LM.md).
+
+The test task is few-shot AG News classification: 1-NN on NCD, 16 references per class, 300 queries, chance 0.25. Ties at the smallest distance are common with byte lengths, so accuracy assumes random tie-breaking. The compressors are:
+
+- zstd, xz, bzip2 and DEFLATE;
+- GPT-2 124M, the only pretrained model reachable from this environment;
+- 11 byte-level transformers trained on CPU (37K to 2.8M parameters, 8 MB of enwik8 or news each);
+- the same transformers mixed with a PAQ-style match model.
+
+| compressor | bits/char, one document | bits/char, stream | NCD(x,x) | 1-NN accuracy |
+|---|---:|---:|---:|---:|
+| zstd:19 | 5.86 | 3.03 | 0.03 | 0.447 |
+| xz:6 | 8.41 | 2.97 | 0.01 | 0.430 |
+| byte LMs, alone | 2.91 to 4.07 | 2.80 to 3.98 | 0.96 to 0.98 | 0.240 to 0.285 |
+| byte LMs + match model | 2.82 to 3.92 | 2.57 to 3.21 | 0.04 to 0.06 | 0.398 to 0.524 |
+| GPT-2 124M | 1.33 | 1.17 | 0.11 | 0.588 |
+
+<p align="center"><img src="docs/img/text_acc_vs_bpc.png" width="95%" alt="Accuracy against bits per character and against the class signal"></p>
+
+Across the 31 compressors, single-document compression rate does not predict accuracy (Spearman ρ = −0.02). The standardized gain from a same-class reference, C(q | r) for the right class versus a wrong one, does predict it (ρ = 0.89).
+
+The small LMs compress every document better than zstd but stay near chance (0.24 to 0.29). They never learned to use their context, so C(xy) ≈ C(x) + C(y). Adding a match model barely changes their bits per character, yet it lifts accuracy to zstd's level. Within the news-trained families, the larger model compresses better and classifies worse: its prior already predicts the vocabulary the reference would supply.
+
+In this run, GPT-2 is the only compressor that is good at both, and it beats zstd:19 by 0.14 (paired 95% CI 0.08 to 0.21). It is on par with TF-IDF 1-NN (0.573), at 22 CPU-minutes per 300 × 64 matrix.
+
+A later run with Pythia, the same training data at 70M, 160M, 410M and 1B parameters, gave the same picture among models that do use their context. Bits per character fell from 1.59 to 1.18 per document while accuracy went 0.657, 0.623, 0.594, 0.602, so the smallest model was the best. With four sizes this trend is not significant. Pythia-70m is the best NCD compressor tested so far.
+
 ## Limitations
 
 - Pairwise cost is quadratic. Per-family medoids or an LSH prefilter would reduce it.
 - Packed samples compress poorly.
-- Appending benign code moves a sample toward benign neighbors; this evasion has not been measured yet.
+- Appending code from another family moves a sample toward that family: 13 points of accuracy at the sample's own size on MalwareBazaar. Generic benign padding has no effect (`python/evasion_append.py`).
+- On real malware, families that share a crypter are confused with each other.
 - `extract` is tested with mutation sweeps but not yet fuzzed.
 
 ## References
 
 - M. Li, X. Chen, X. Li, B. Ma, P. Vitányi. The similarity metric. IEEE Trans. Inf. Theory 50(12), 2004.
 - R. Cilibrasi, P. Vitányi. Clustering by compression. IEEE Trans. Inf. Theory 51(4), 2005.
+- G. Delétang et al. Language modeling is compression. ICLR 2024.
+- Y. Huang, J. Zhang, Z. Shan, J. He. Compression represents intelligence linearly. COLM 2024.
 - M. Cebrián, M. Alfonseca, A. Ortega. Common pitfalls using the normalized compression distance. Commun. Inf. Syst. 5(4), 2005.
 - H. Anderson, P. Roth. EMBER: An open dataset for training static PE malware machine learning models. arXiv:1804.04637, 2018.
 - L. Yang et al. BODMAS: An open dataset for learning based temporal analysis of PE malware. DLS 2021.

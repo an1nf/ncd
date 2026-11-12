@@ -36,6 +36,18 @@ jobs:
       - name: End-to-end smoke test (fabricated data)
         run: python python/smoke_test.py
 
+  lmcodec:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - run: pip install -r python/requirements.txt regex
+      - name: Arithmetic coder and LM codec (random tiny model, no downloads)
+        run: python python/test_lmcodec.py
+
   nix:
     runs-on: ubuntu-latest
     steps:

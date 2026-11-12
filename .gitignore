@@ -2,6 +2,7 @@
 /demo-out
 /results
 /dist
+.venv*/
 __pycache__/
 *.pyc
 .direnv/
@@ -11,6 +12,9 @@ result-*
 # Never commit samples. Keep real malware outside the repository entirely.
 /data
 /corpus
+/models
+*.pt
+*.onnx
 *.exe
 *.dll
 *.bin

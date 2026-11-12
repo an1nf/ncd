@@ -10,6 +10,7 @@ import hashlib
 import io
 import json
 import re
+import time
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -22,9 +23,32 @@ STABLE = re.compile(r"^\d+(\.\d+)*$")
 PE_EXT = (".pyd", ".dll", ".exe")
 
 
-def get(url: str) -> bytes:
-    with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "ncd-threat"}), timeout=300) as r:
-        return r.read()
+def get(url: str, tries: int = 6) -> bytes:
+    """Download with retries: slow or flaky links time out on large wheels."""
+    for i in range(tries):
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "ncd-threat"}),
+                                        timeout=120) as r:
+                return r.read()
+        except (OSError, TimeoutError) as e:
+            if i == tries - 1:
+                raise
+            wait = 5 * 2 ** i
+            print(f"  {type(e).__name__} on {url.rsplit('/', 1)[-1]}; retry in {wait}s", flush=True)
+            time.sleep(wait)
+    raise AssertionError
+
+
+def get_wheel(url: str, cache: Path) -> bytes:
+    """Wheels are kept in OUT/wheels, so an interrupted run resumes without downloading again."""
+    path = cache / url.rsplit("/", 1)[-1]
+    if path.exists():
+        return path.read_bytes()
+    data = get(url)
+    tmp = path.with_suffix(".part")
+    tmp.write_bytes(data)
+    tmp.replace(path)
+    return data
 
 
 def pick_wheel(files: list[dict]) -> dict | None:
@@ -51,6 +75,8 @@ def main() -> None:
 
     store = args.out / "samples"
     store.mkdir(parents=True, exist_ok=True)
+    cache = args.out / "wheels"
+    cache.mkdir(exist_ok=True)
     rows, seen = [], set()
     for pkg in args.packages:
         info = json.loads(get(f"https://pypi.org/pypi/{pkg}/json"))
@@ -65,7 +91,7 @@ def main() -> None:
             cands = [cands[i] for i in sorted(set(idx))]
         n = 0
         for when, ver, w in cands:
-            z = zipfile.ZipFile(io.BytesIO(get(w["url"])))
+            z = zipfile.ZipFile(io.BytesIO(get_wheel(w["url"], cache)))
             members = sorted(m.filename for m in z.infolist()
                              if m.filename.lower().endswith(PE_EXT) and args.min_size <= m.file_size <= args.max_size)
             if len(members) > args.per_wheel:

@@ -22,7 +22,8 @@ def main() -> None:
     ap.add_argument("--id-col", default="sha")
     ap.add_argument("--label-col", default="family")
     ap.add_argument("--time-col", default=None)
-    ap.add_argument("--protocol", choices=["random", "temporal"], default="random")
+    ap.add_argument("--protocol", choices=["random", "temporal", "temporal-family"], default="random",
+                    help="temporal: one global time cut; temporal-family: the latest test-frac of each family")
     ap.add_argument("--test-frac", type=float, default=0.3)
     ap.add_argument("--min-per-family", type=int, default=10, help="drop rarer families")
     ap.add_argument("--max-per-family", type=int, default=None, help="subsample (NCD cost is quadratic)")
@@ -63,6 +64,24 @@ def main() -> None:
             n_test = int(round(len(g) * args.test_frac))
             n_test = min(max(n_test, 1), len(g) - 1)
             df.loc[rng.permutation(g.index)[:n_test], "split"] = "test"
+    elif args.protocol == "temporal-family":
+        # Train on each family's older samples, test on its newer ones. Unlike one global cut,
+        # every family keeps the same train/test ratio even when the families were collected
+        # over different time windows (MalwareBazaar returns the latest samples per signature).
+        if "time" not in df:
+            raise SystemExit("--protocol temporal-family needs --time-col")
+        df = df.dropna(subset=["time"])
+        df["split"] = "train"
+        for lab, g in df.groupby("label"):
+            n_test = min(max(int(round(len(g) * args.test_frac)), 1), len(g) - 1)
+            cut = g["time"].sort_values().iloc[-n_test]
+            test = g["time"] >= cut  # samples with the same timestamp stay on one side
+            if test.all():
+                test = g["time"] > cut
+            df.loc[g.index[test.to_numpy()], "split"] = "test"
+            tr, te = g.loc[~test, "time"], g.loc[test, "time"]
+            print(f"  {lab}: {len(tr)} train {tr.min():%Y-%m-%d}..{tr.max():%Y-%m-%d}, "
+                  f"{len(te)} test {te.min():%Y-%m-%d}..{te.max():%Y-%m-%d}")
     else:
         if "time" not in df:
             raise SystemExit("--protocol temporal needs --time-col")
@@ -73,6 +92,12 @@ def main() -> None:
         unseen = (df["split"] == "test") & ~df["label"].isin(seen)
         print(f"temporal cut at {cut}; dropping {unseen.sum()} test samples from families unseen in training")
         df = df[~unseen]
+        per = df.groupby(["label", "split"]).size().unstack(fill_value=0)
+        thin = per[per.get("train", 0) < 0.5 * per.get("test", 0)]
+        if len(thin):
+            print("warning: families with far fewer training than test samples after the global cut "
+                  "(their samples cover different time windows); see --protocol temporal-family:\n"
+                  + thin.to_string())
 
     df = df.sort_values(["split", "label", "id"])
     args.out.parent.mkdir(parents=True, exist_ok=True)

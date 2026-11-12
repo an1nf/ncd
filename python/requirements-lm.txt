@@ -1,0 +1,7 @@
+# Language-model codecs (python/lmcodec). CPU wheels: --index-url https://download.pytorch.org/whl/cpu
+torch>=2.4
+regex>=2023.0
+scipy>=1.10
+# Only for convert_gpt2_onnx.py
+onnx>=1.15
+onnxruntime>=1.17

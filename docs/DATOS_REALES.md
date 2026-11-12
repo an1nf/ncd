@@ -19,7 +19,7 @@ Las características EMBER (línea base de malware) usan `thrember`, que fija de
 
 ```bash
 python -m venv .venv-ember && . .venv-ember/bin/activate
-pip install "EMBER2024 @ git+https://github.com/FutureComputing4AI/EMBER2024.git" "signify<0.8" \
+pip install "thrember @ git+https://github.com/FutureComputing4AI/EMBER2024.git" "signify<0.8" \
     "oscrypto @ git+https://github.com/wbond/oscrypto.git@76bfdcb7285d856c44f8d0fbafe0ecca1c6d2f8b"
 ```
 
@@ -80,7 +80,7 @@ Por familia toma `--per-family` muestras repartidas a lo largo de su historial (
 
 ```bash
 python python/make_split.py --meta data/bazaar/metadata.csv --id-col sha256 --label-col family \
-    --time-col first_seen --protocol temporal --min-per-family 20 \
+    --time-col first_seen --protocol temporal-family --min-per-family 20 \
     --samples-dir data/bazaar/samples --link-to data/bazaar/corpus --out data/bazaar/splits.csv
 ncd eval data/bazaar/corpus --split-file data/bazaar/splits.csv -k 1 -c zstd:9 -m conditional \
     --json results/bazaar/ncd_zstd9_cond_code.json
@@ -92,13 +92,25 @@ python python/baseline_malware.py --features data/bazaar/ember.npy --index data/
 python python/compare.py results/bazaar --out results/bazaar/summary.md
 ```
 
-Repite también con `--protocol random` en `make_split.py`. La diferencia entre la partición aleatoria y la temporal mide cuánto se degrada cada modelo con muestras más nuevas que las de entrenamiento.
+Repite también con `--protocol random` en `make_split.py`. La diferencia entre la partición aleatoria y la temporal mide cuánto se degrada cada modelo con muestras más nuevas que las de entrenamiento. `temporal-family` corta cada familia por separado. `temporal`, con un solo corte global, solo tiene sentido si todas las familias cubren el mismo periodo.
 
 Puntos a vigilar:
 
 - Muchas de estas familias son .NET: la sección `.text` contiene IL y metadatos, no código nativo. Compara `-v code` con `-v whole`.
 - Un `fell back` alto indica archivos que no son PE válidos o están dañados.
 - Si varias familias comparten empaquetador (crypter), la NCD agrupa por empaquetador y no por familia. La matriz de confusión lo delata: errores concentrados entre pares de familias concretos.
+
+### Resultados (noviembre de 2026)
+
+Corrida completa con `scripts/malware_families.sh`: 8 familias × 40 muestras, 96 de prueba por partición, 12 por familia. Las tablas en inglés están en el README. En resumen:
+
+- **Partición temporal global: no sirve aquí.** MalwareBazaar devuelve las muestras más recientes de cada firma, así que las 40 de Formbook cubren dos meses y las de RedLine casi dos años. Con un corte único, Formbook quedó con 3 muestras de entrenamiento y 37 de prueba. `make_split.py` ahora lo avisa. Usa `--protocol temporal-family`, que es lo que hace el script por defecto.
+- **Partición aleatoria.** GBDT sobre EMBER logra 0.635, la NCD con zstd:9 sobre el archivo completo 0.552, el k-NN sobre EMBER 0.521 y la NCD sobre la sección de código 0.469.
+- **Partición temporal por familia.** GBDT logra 0.500 y la NCD con zstd:9 0.510, tanto sobre el código como sobre el archivo completo. En la prueba pareada la diferencia es +0.010, con un intervalo de −0.07 a +0.09. GBDT pierde 13.5 puntos con muestras nuevas; la NCD casi nada.
+- **Confusión principal.** AgentTesla acaba clasificada como Formbook con los dos métodos. Es probable que compartan cifrador, pero no está comprobado.
+- **Evasión.** Añadir código benigno de PyPI no cambia la exactitud. Añadir código de QuasarRAT, igual al tamaño de la muestra, la baja de 0.46 a 0.33.
+
+Para repetirlo con más muestras y un intervalo más estrecho: `PER_FAMILY=80 SOURCE=bazaar DATA=~/ncd-data/bazaar80 ./scripts/malware_families.sh`.
 
 ### BODMAS
 

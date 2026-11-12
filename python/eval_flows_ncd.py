@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-import ncdthreat as nt
+import ncd_backend as nt  # ncd-core codecs, or lm:PATH for a language-model codec
 from common import BENIGN, auc_vs_benign, knn_predict, print_summary, report_dict, save_result
 
 
@@ -31,7 +31,9 @@ def main() -> None:
     tr = np.flatnonzero(meta["split"] == "train")
     te = np.flatnonzero(meta["split"] == "test")
     labels = meta["label"].to_numpy()
-    tag = f"ncd-{args.codec.replace(':', '')}-{args.method}"
+    codec_tag = (f"lm{Path(args.codec[3:]).stem.replace(':', '')}" if nt.is_lm(args.codec)
+                 else args.codec.replace(":", ""))
+    tag = f"ncd-{codec_tag}-{args.method}"
     print(f"{len(tr)} train / {len(te)} test windows; codec {args.codec}, method {args.method}")
 
     if len(set(labels[tr])) < 2:
